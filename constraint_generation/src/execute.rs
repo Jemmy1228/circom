@@ -386,7 +386,7 @@ fn execute_statement(
 
 
             if let Option::Some(node) = actual_node {
-                if *op == AssignOp::AssignConstraintSignal || (*op == AssignOp::AssignSignal && flags.inspect){
+                if *op == AssignOp::AssignConstraintSignal || *op == AssignOp::AssignSignal{
                     debug_assert!(possible_constraint.is_some());
                     
                     if *op == AssignOp::AssignConstraintSignal && runtime.block_type == BlockType::Unknown{
@@ -433,12 +433,14 @@ fn execute_statement(
                             } else {
                                 let p = runtime.constants.get_p().clone();
                                 let symbol = signal_left;
+                                println!("[{}] Assign: {} <== {}", node.report_name, symbol, value_right);
                                 let expr = AExpr::sub(&symbol, &value_right, &p);
                                 let ctr = AExpr::transform_expression_to_constraint_form(expr, &p).unwrap();
                                 node.add_constraint(ctr);
                             }
                         } else if let AssignOp::AssignSignal = op {// needs fix, check case arrays
                             //debug_assert!(possible_constraint.is_some());
+                            println!("[{}] Hint: {} <-- {}", node.report_name, signal_left, value_right); // Can be printed out using `rhe`
                             let signal_name = match signal_left{
                                 AExpr::Signal { symbol } =>{
                                     symbol
@@ -602,6 +604,7 @@ fn execute_statement(
             for i in 0..arith_left.len(){
                 let value_left = &arith_left[i];
                 let value_right = &arith_right[i];
+                println!("[{}] Constraint: {} === {}", actual_node.as_ref().unwrap().report_name, value_left, value_right);
                 let possible_non_quadratic =
                     AExpr::sub(
                         &value_left, 
@@ -632,7 +635,7 @@ fn execute_statement(
             let mut f_return = execute_expression(value, program_archive, runtime, flags)?;
             if let Option::Some(slice) = &mut f_return.arithmetic_slice {
                 if runtime.block_type == BlockType::Unknown {
-                    *slice = AExpressionSlice::new_with_route(slice.route(), &AExpr::NonQuadratic);
+                    *slice = AExpressionSlice::new_with_route(slice.route(), &AExpr::default());
                 }
             }
             debug_assert!(FoldedValue::valid_arithmetic_slice(&f_return));
@@ -1054,8 +1057,20 @@ fn execute_expression(
                     execute_expression(if_false, program_archive, runtime, flags)?
                 }
             } else {
-                let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::NonQuadratic));
-                FoldedValue { arithmetic_slice, ..FoldedValue::default() }
+                let f_true = execute_expression(if_true, program_archive, runtime, flags)?;
+                let f_false = execute_expression(if_false, program_archive, runtime, flags)?;
+                if FoldedValue::valid_arithmetic_slice(&f_true) && FoldedValue::valid_arithmetic_slice(&f_false) {
+                    let ae_true = safe_unwrap_to_arithmetic_slice(f_true, line!());
+                    let ae_false = safe_unwrap_to_arithmetic_slice(f_false, line!());
+                    let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::NonQuadratic {
+                        repr: format!("({} ? {} : {})", ae_cond, ae_true, ae_false),
+                        op: 13
+                    }));
+                    FoldedValue { arithmetic_slice, ..FoldedValue::default() }
+                } else {
+                    let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
+                    FoldedValue { arithmetic_slice, ..FoldedValue::default() }
+                }
             }
         }
         Call { id, args, meta, .. } => {
@@ -1405,12 +1420,12 @@ fn perform_assign(
         };
         let mut r_slice = safe_unwrap_to_arithmetic_slice(r_folded, line!());
         if runtime.block_type == BlockType::Unknown {
-            r_slice = AExpressionSlice::new_with_route(r_slice.route(), &AExpr::NonQuadratic);
+            r_slice = AExpressionSlice::new_with_route(r_slice.route(), &AExpr::default());
             r_tags = TagWire::default();
         }
         if accessing_information.undefined {
             let new_value =
-                AExpressionSlice::new_with_route(symbol_content.route(), &AExpr::NonQuadratic);
+                AExpressionSlice::new_with_route(symbol_content.route(), &AExpr::default());
             let memory_result =
                 AExpressionSlice::insert_values(symbol_content, &vec![], &new_value, false);
             treat_result_with_memory_error_void(
@@ -1696,6 +1711,7 @@ fn perform_assign(
                             goes_to: node_pointer,
                             indexed_with: accessing_information.array_access.clone(),
                         };
+                        println!("[{}] Component: {} {}", node.report_name, full_symbol.clone(), runtime.exec_program.get_node(node_pointer).unwrap().report_name);
                         node.add_arrow(full_symbol.clone(), data);
                     },
                     ExecutedStructure::Bus(_) =>{
@@ -1930,6 +1946,8 @@ fn perform_assign(
                                 indexed_with: accessing_information.array_access.clone(),
                             };
                             let component_symbol = create_component_symbol(symbol, &accessing_information.array_access);
+                            println!("[{}] DelayedComponent: {} {}", node.report_name, component_symbol.clone(), runtime.exec_program.get_node(node_pointer).unwrap().report_name);
+                            // assert!(false);
                             node.add_arrow(component_symbol, data);
                         },
                         ExecutedStructure::Bus(_) =>{
@@ -2643,7 +2661,7 @@ fn execute_variable(
 ) -> Result<FoldedValue, ()> {
     let access_information = treat_accessing(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
-        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::NonQuadratic));
+        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
     debug_assert!(access_information.signal_access.is_none());
@@ -2680,7 +2698,7 @@ fn execute_signal(
 ) -> Result<FoldedValue, ()> {
     let access_information = treat_accessing(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
-        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::NonQuadratic));
+        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
     debug_assert!(access_information.after_signal.is_empty());
@@ -2817,7 +2835,7 @@ fn execute_bus(
     };
 
     if access_information.undefined {
-        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::NonQuadratic));
+        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
     let environment_response =
@@ -3001,7 +3019,7 @@ fn execute_component(
         
     let access_information = treat_accessing_bus(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
-        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::NonQuadratic));
+        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
 
