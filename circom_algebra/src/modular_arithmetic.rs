@@ -9,6 +9,13 @@ pub enum ArithmeticError {
 fn modulus(a: &BigInt, b: &BigInt) -> BigInt {
     ((a % b) + b) % b
 }
+fn modulus_field(a: &BigInt, field: &BigInt) -> BigInt {
+    if a > field || a < &-field {
+        a % field
+    } else {
+        a.clone()
+    }
+}
 // The maximum number of bits a BigInt can have is 18_446_744_073_709_551_615
 // Returns the LITTLE ENDIAN representation of the bigint
 fn bit_representation(elem: &BigInt) -> (Sign, Vec<u8>) {
@@ -26,23 +33,27 @@ fn mask(field: &BigInt) -> BigInt {
 pub fn add(left: &BigInt, right: &BigInt, field: &BigInt) -> BigInt {
     //let left = modulus(left,field);
     //let right = modulus(right,field);
-    modulus(&(left + right), field)
+    modulus_field(&(left + right), field)
 }
 pub fn mul(left: &BigInt, right: &BigInt, field: &BigInt) -> BigInt {
     //let left = modulus(left,field);
     //let right = modulus(right,field);
-    modulus(&(left * right), field)
+    modulus_field(&(left * right), field)
 }
 pub fn sub(left: &BigInt, right: &BigInt, field: &BigInt) -> BigInt {
     //let left = modulus(left,field);
     //let right = modulus(right,field);
-    modulus(&(left - right), field)
+    modulus_field(&(left - right), field)
 }
 pub fn div(left: &BigInt, right: &BigInt, field: &BigInt) -> Result<BigInt, ArithmeticError> {
     let right_inverse = right
         .mod_inverse(field)
         .map_or(Result::Err(ArithmeticError::DivisionByZero), |a| Result::Ok(a))?;
-    let res = mul(left, &right_inverse, field);
+    let res = if left % right == BigInt::from(0) {
+        left / right
+    } else {
+        mul(left, &right_inverse, field)
+    };
     Result::Ok(res)
 }
 pub fn idiv(left: &BigInt, right: &BigInt, field: &BigInt) -> Result<BigInt, ArithmeticError> {
