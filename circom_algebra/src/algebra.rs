@@ -327,6 +327,19 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             .or_insert_with(|| BigInt::from(0));
         debug_assert!(ArithmeticExpression::valid_hashmap_for_expression(initial));
     }
+    pub fn modularize_hashmap(
+        coefficients: &HashMap<C, BigInt>,
+        field: &BigInt,
+    ) -> HashMap<C, BigInt> {
+        let mut modularized = HashMap::new();
+        for (symbol, coefficient) in coefficients {
+            modularized.insert(
+                symbol.clone(),
+                (coefficient % field + field) % field,
+            );
+        }
+        modularized
+    }
     fn valid_hashmap_for_expression(h: &HashMap<C, BigInt>) -> bool {
         let cc = ArithmeticExpression::constant_coefficient();
         h.contains_key(&cc)

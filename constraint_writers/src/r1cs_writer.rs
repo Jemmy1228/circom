@@ -288,19 +288,22 @@ impl ConstraintSection {
         field: &BigInt,
     ) -> Result<(), ()> {
         let field_size = self.field_size;
+        let a = ArithmeticExpression::modularize_hashmap(a, field);
+        let b = ArithmeticExpression::modularize_hashmap(b, field);
+        let c = ArithmeticExpression::modularize_hashmap(c, field);
         let mut r1cs_a = HashMap::new();
         for (k, v) in a {
-            let (_, bytes) = BigInt::from(*k).to_bytes_le();
+            let (_, bytes) = BigInt::from(k).to_bytes_le();
             r1cs_a.insert(bytes, v.clone());
         }
         let mut r1cs_b = HashMap::new();
         for (k, v) in b {
-            let (_, bytes) = BigInt::from(*k).to_bytes_le();
+            let (_, bytes) = BigInt::from(k).to_bytes_le();
             r1cs_b.insert(bytes, v.clone());
         }
         let mut r1cs_c = HashMap::new();
         for (k, v) in c {
-            let (_, bytes) = BigInt::from(*k).to_bytes_le();
+            let (_, bytes) = BigInt::from(k).to_bytes_le();
             r1cs_c.insert(bytes, v.clone());
         }
         let size = write_constraint(&mut self.writer, &r1cs_a, &r1cs_b, &r1cs_c, field_size)?;
