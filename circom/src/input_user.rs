@@ -5,6 +5,7 @@ pub struct Input {
     pub out_r1cs: PathBuf,
     pub out_json_constraints: PathBuf,
     pub out_json_substitutions: PathBuf,
+    pub out_json_instructions: PathBuf,
     pub out_wat_code: PathBuf,
     pub out_wasm_code: PathBuf,
     pub out_wasm_name: String,
@@ -23,6 +24,7 @@ pub struct Input {
     pub sym_flag: bool,
     pub json_constraint_flag: bool,
     pub json_substitution_flag: bool,
+    pub json_instruction_flag: bool,
     pub main_inputs_flag: bool,
     pub print_ir_flag: bool,
     pub fast_flag: bool,
@@ -91,6 +93,11 @@ impl Input {
                 &format!("{}_substitutions", file_name),
                 JSON,
             ),
+            out_json_instructions: Input::build_output(
+                &output_path,
+                &format!("{}_instructions", file_name),
+                JSON
+            ),
             wat_flag:input_processing::get_wat(&matches),
             wasm_flag: input_processing::get_wasm(&matches),
             c_flag: c_flag,
@@ -100,6 +107,7 @@ impl Input {
             main_inputs_flag: input_processing::get_main_inputs_log(&matches),
             json_constraint_flag: input_processing::get_json_constraints(&matches),
             json_substitution_flag: input_processing::get_json_substitutions(&matches),
+            json_instruction_flag: input_processing::get_instr(&matches),
             print_ir_flag: input_processing::get_ir(&matches),
             no_rounds: if let SimplificationStyle::O2(r) = o_style { r } else { 0 },
             fast_flag: o_style == SimplificationStyle::O0,
@@ -197,6 +205,12 @@ impl Input {
     pub fn json_substitutions_flag(&self) -> bool {
         self.json_substitution_flag
     }
+    pub fn json_instr_flag(&self) -> bool {
+        self.json_instruction_flag
+    }
+    pub fn json_instructions_file(&self) -> &str {
+        self.out_json_instructions.to_str().unwrap()
+    }
     pub fn main_inputs_flag(&self) -> bool {
         self.main_inputs_flag
     }
@@ -289,6 +303,10 @@ mod input_processing {
 
     pub fn get_json_substitutions(matches: &ArgMatches) -> bool {
         matches.is_present("print_json_sub")
+    }
+
+    pub fn get_instr(matches: &ArgMatches) -> bool {
+        matches.is_present("print_instr")
     }
 
     pub fn get_sym(matches: &ArgMatches) -> bool {
@@ -451,6 +469,13 @@ mod input_processing {
                     .takes_value(false)
                     .display_order(980)
                     .help("Outputs the substitution applied in the simplification phase in json format"),
+            )
+            .arg(
+                Arg::with_name("print_instr")
+                    .long("instructions")
+                    .takes_value(false)
+                    .display_order(989)
+                    .help("Outputs the instructions of each template in instr format"),
             )
             .arg(
                 Arg::with_name("print_sym")

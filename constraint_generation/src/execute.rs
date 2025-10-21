@@ -433,14 +433,14 @@ fn execute_statement(
                             } else {
                                 let p = runtime.constants.get_p().clone();
                                 let symbol = signal_left;
-                                println!("[{}] Assign: {} <== {}", node.report_name, symbol, value_right);
+                                node.add_instr_assign(&symbol, &value_right);
                                 let expr = AExpr::sub(&symbol, &value_right, &p);
                                 let ctr = AExpr::transform_expression_to_constraint_form(expr, &p).unwrap();
                                 node.add_constraint(ctr);
                             }
                         } else if let AssignOp::AssignSignal = op {// needs fix, check case arrays
                             //debug_assert!(possible_constraint.is_some());
-                            println!("[{}] Hint: {} <-- {}", node.report_name, signal_left, value_right); // Can be printed out using `rhe`
+                            node.add_instr_hint(&signal_left, &value_right);
                             let signal_name = match signal_left{
                                 AExpr::Signal { symbol } =>{
                                     symbol
@@ -604,7 +604,7 @@ fn execute_statement(
             for i in 0..arith_left.len(){
                 let value_left = &arith_left[i];
                 let value_right = &arith_right[i];
-                println!("[{}] Constraint: {} === {}", actual_node.as_ref().unwrap().report_name, value_left, value_right);
+                actual_node.as_mut().unwrap().add_instr_constraint(&value_left, &value_right);
                 let possible_non_quadratic =
                     AExpr::sub(
                         &value_left, 
@@ -1060,12 +1060,36 @@ fn execute_expression(
                 let f_true = execute_expression(if_true, program_archive, runtime, flags)?;
                 let f_false = execute_expression(if_false, program_archive, runtime, flags)?;
                 if FoldedValue::valid_arithmetic_slice(&f_true) && FoldedValue::valid_arithmetic_slice(&f_false) {
-                    let ae_true = safe_unwrap_to_arithmetic_slice(f_true, line!());
-                    let ae_false = safe_unwrap_to_arithmetic_slice(f_false, line!());
-                    let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::NonQuadratic {
-                        repr: format!("({} ? {} : {})", ae_cond, ae_true, ae_false),
-                        op: 13
-                    }));
+                    let mut aes_true = safe_unwrap_to_arithmetic_slice(f_true, line!());
+                    let mut aes_false = safe_unwrap_to_arithmetic_slice(f_false, line!());
+
+                    let mut ae = Vec::new();
+
+                    for index in 0..AExpressionSlice::get_number_of_cells(&aes_true){
+                        let ae_true = treat_result_with_memory_error(
+                            AExpressionSlice::get_mut_reference_to_single_value_by_index(&mut aes_true, index),
+                            if_true.get_meta(),
+                            &mut runtime.runtime_errors,
+                            &runtime.call_trace,
+                        )?;
+                        let ae_false = treat_result_with_memory_error(
+                            AExpressionSlice::get_mut_reference_to_single_value_by_index(&mut aes_false, index),
+                            if_false.get_meta(),
+                            &mut runtime.runtime_errors,
+                            &runtime.call_trace,
+                        )?;
+
+                        ae.push(AExpr::NonQuadratic {
+                            expr: circom_algebra::algebra::NonQuadraticExpression::InlineSwitch {
+                                condition: Box::new(ae_cond.clone()),
+                                true_case: Box::new(std::mem::take(ae_true)),
+                                false_case: Box::new(std::mem::take(ae_false)),
+                            }
+                        });
+                    }
+                    let arithmetic_slice = Option::Some(
+                        AExpressionSlice::new_array(aes_true.route().to_vec(), ae)
+                    );
                     FoldedValue { arithmetic_slice, ..FoldedValue::default() }
                 } else {
                     let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
@@ -1711,7 +1735,7 @@ fn perform_assign(
                             goes_to: node_pointer,
                             indexed_with: accessing_information.array_access.clone(),
                         };
-                        println!("[{}] Component: {} {}", node.report_name, full_symbol.clone(), runtime.exec_program.get_node(node_pointer).unwrap().report_name);
+                        node.add_instr_component(&full_symbol, node_pointer);
                         node.add_arrow(full_symbol.clone(), data);
                     },
                     ExecutedStructure::Bus(_) =>{
@@ -1946,8 +1970,7 @@ fn perform_assign(
                                 indexed_with: accessing_information.array_access.clone(),
                             };
                             let component_symbol = create_component_symbol(symbol, &accessing_information.array_access);
-                            println!("[{}] DelayedComponent: {} {}", node.report_name, component_symbol.clone(), runtime.exec_program.get_node(node_pointer).unwrap().report_name);
-                            // assert!(false);
+                            node.add_instr_component(&component_symbol, node_pointer);
                             node.add_arrow(component_symbol, data);
                         },
                         ExecutedStructure::Bus(_) =>{

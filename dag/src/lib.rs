@@ -10,13 +10,55 @@ use constraint_writers::debug_writer::DebugWriter;
 use constraint_writers::ConstraintExporter;
 use program_structure::constants::UsefulConstants;
 use program_structure::error_definition::ReportCollection;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    io::Write,
+};
 type Signal = usize;
 type Constraint = circom_algebra::algebra::Constraint<usize>;
 type Substitution = circom_algebra::algebra::Substitution<usize>;
 type Range = std::ops::Range<usize>;
 
 pub type FastSubAccess = HashMap<usize, Substitution>;
+
+use circom_algebra::algebra::ArithmeticExpression;
+pub enum InstrStatement {
+    Assign { symbol: ArithmeticExpression<String>, expr: ArithmeticExpression<String> },
+    Hint { symbol: ArithmeticExpression<String>, expr: ArithmeticExpression<String> },
+    Constraint { left: ArithmeticExpression<String>, right: ArithmeticExpression<String> },
+}
+
+impl std::fmt::Display for InstrStatement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InstrStatement::Assign { symbol, expr } => {
+                write!(f, "{} <== {};", symbol, expr)
+            },
+            InstrStatement::Hint { symbol, expr } => {
+                write!(f, "{} <-- {};", symbol, expr)
+            },
+            InstrStatement::Constraint { left, right } => {
+                write!(f, "{} === {};", left, right)
+            }
+        }
+    }
+}
+
+impl InstrStatement {
+    pub fn export_json(&self) -> String {
+        match self {
+            InstrStatement::Assign { symbol, expr } => {
+                format!("{{\"$\":\"A\",\"s\":\"{}\",\"e\": {}}}", symbol, expr.export_json())
+            }
+            InstrStatement::Hint { symbol, expr } => {
+                format!("{{\"$\":\"H\",\"s\":\"{}\",\"e\": {}}}", symbol, expr.export_json())
+            }
+            InstrStatement::Constraint { left, right } => {
+                format!("{{\"$\":\"C\",\"l\": {},\"r\": {}}}", left.export_json(), right.export_json())
+            }
+        }
+    }
+}
 
 pub struct Tree<'a> {
     dag: &'a DAG,
@@ -91,11 +133,18 @@ pub struct Edge {
     in_number: usize,
     out_number: usize,
     in_component_number: usize,
-    out_component_number: usize
+    out_component_number: usize,
 }
 impl Edge {
     fn new_entry(id: usize) -> Edge {
-        Edge { label: "main".to_string(), goes_to: id, in_number: 0, out_number: 0, in_component_number: 0, out_component_number: 0  }
+        Edge {
+            label: "main".to_string(),
+            goes_to: id,
+            in_number: 0,
+            out_number: 0,
+            in_component_number: 0,
+            out_component_number: 0,
+        }
     }
 
     pub fn get_goes_to(&self) -> usize {
@@ -146,9 +195,12 @@ pub struct Node {
     ordered_signals: Vec<String>,
     locals: HashSet<usize>,
     reachables: HashSet<usize>, // locals and io of subcomponents
+    signal_types: HashMap<String, char>,
     forbidden_if_main: HashSet<usize>,
     io_signals: Vec<usize>,
     constraints: Vec<Constraint>,
+    instructions: Vec<InstrStatement>,
+    instruction_components: BTreeMap<String, usize>,
     underscored_signals: Vec<usize>,
     is_parallel: bool,
     has_parallel_sub_cmp: bool,
@@ -162,10 +214,11 @@ impl Node {
         template_name: String,
         parameters: Vec<BigInt>,
         is_parallel: bool,
-        is_custom_gate: bool
+        is_custom_gate: bool,
     ) -> Node {
         Node {
-            template_name, entry: Edge::new_entry(id),
+            template_name,
+            entry: Edge::new_entry(id),
             parameters,
             number_of_components: 1,
             is_parallel,
@@ -179,6 +232,7 @@ impl Node {
     fn add_input(&mut self, name: String, is_public: bool) {
         let id = self.number_of_signals + 1;
         self.io_signals.push(id);
+        self.signal_types.insert(name.clone(), if is_public { 'p' } else { 'i' });
         self.public_inputs_length += if is_public { 1 } else { 0 };
         self.signal_correspondence.insert(name, id);
         self.locals.insert(id);
@@ -194,6 +248,7 @@ impl Node {
     fn add_output(&mut self, name: String) {
         let id = self.number_of_signals + 1;
         self.io_signals.push(id);
+        self.signal_types.insert(name.clone(), 'o');
         self.signal_correspondence.insert(name, id);
         self.forbidden_if_main.insert(id);
         self.locals.insert(id);
@@ -205,6 +260,7 @@ impl Node {
 
     fn add_intermediate(&mut self, name: String) {
         let id = self.number_of_signals + 1;
+        self.signal_types.insert(name.clone(), 't');
         self.signal_correspondence.insert(name, id);
         self.locals.insert(id);
         self.reachables.insert(id);
@@ -292,6 +348,76 @@ impl Node {
     pub fn number_of_subcomponents_indexes(&self) -> usize {
         self.number_of_subcomponents_indexes
     }
+
+    pub fn export_json(&self, writer: &mut dyn Write, nodes: &Vec<Node>) {
+        // buffer.push_str(&format!("\"{}\": {{\n", self.template_name));
+
+        writeln!(writer, "\"{}\": {{", self.template_name).unwrap();
+        write!(writer, "\"parameters\": [").unwrap();
+        if self.parameters.is_empty() {
+            writeln!(writer, "],").unwrap();
+        } else {
+            let mut sep = false;
+            writeln!(writer).unwrap();
+            for param in &self.parameters {
+                if sep {
+                    writeln!(writer, ",").unwrap();
+                }
+                write!(writer, "{}", param).unwrap();
+                sep = true;
+            }
+            writeln!(writer, "\n],").unwrap();
+        }
+
+        write!(writer, "\"signals\": {{").unwrap();
+        if self.ordered_signals.is_empty() {
+            writeln!(writer, "}},").unwrap();
+        } else {
+            let mut sep = false;
+            writeln!(writer).unwrap();
+            for symbol in &self.ordered_signals {
+                if sep {
+                    writeln!(writer, ",").unwrap();
+                }
+                write!(writer, "\"{}\": \"{}\"", symbol, self.signal_types[symbol]).unwrap();
+                sep = true;
+            }
+            writeln!(writer, "\n}},").unwrap();
+        }
+
+        write!(writer, "\"subcomponents\": {{").unwrap();
+        if self.instruction_components.is_empty() {
+            writeln!(writer, "}},").unwrap();
+        } else {
+            let mut sep = false;
+            writeln!(writer).unwrap();
+            for (name, id) in &self.instruction_components {
+                if sep {
+                    writeln!(writer, ",").unwrap();
+                }
+                write!(writer, "\"{}\": \"{}\"", name, nodes[*id].template_name).unwrap();
+                sep = true;
+            }
+            writeln!(writer, "}},").unwrap();
+        }
+
+        write!(writer, "\"instructions\": [").unwrap();
+        if self.instructions.is_empty() {
+            writeln!(writer, "]").unwrap();
+        } else {
+            let mut sep = false;
+            writeln!(writer).unwrap();
+            for instr in &self.instructions {
+                if sep {
+                    writeln!(writer, ",").unwrap();
+                }
+                write!(writer, "{}", instr.export_json()).unwrap();
+                sep = true;
+            }
+            writeln!(writer, "\n]").unwrap();
+        }
+        writeln!(writer, "}}").unwrap();
+    }
 }
 
 pub struct DAG {
@@ -317,12 +443,7 @@ impl ConstraintExporter for DAG {
 
 impl DAG {
     pub fn new(prime: &String) -> DAG {
-        DAG{
-            prime : prime.clone(),
-            one_signal: 0,
-            nodes: Vec::new(),
-            adjacency: Vec::new(),
-        }
+        DAG { prime: prime.clone(), one_signal: 0, nodes: Vec::new(), adjacency: Vec::new() }
     }
 
     pub fn add_edge(&mut self, to: usize, label: &str, is_parallel: bool) -> Option<&Edge> {
@@ -354,7 +475,7 @@ impl DAG {
                     let concrete_name = format!("{}.{}", label, signal);
                     let concrete_value = with.in_number + *id;
                     correspondence.insert(concrete_name, concrete_value);
-                    if *id <= self.nodes[to].inputs_length + self.nodes[to].outputs_length{
+                    if *id <= self.nodes[to].inputs_length + self.nodes[to].outputs_length {
                         // in case it is an input/output signal
                         reachables.insert(concrete_value);
                     }
@@ -375,12 +496,10 @@ impl DAG {
         template_name: String,
         parameters: Vec<BigInt>,
         is_parallel: bool,
-        is_custom_gate: bool
+        is_custom_gate: bool,
     ) -> usize {
         let id = self.nodes.len();
-        self.nodes.push(
-            Node::new(id, template_name, parameters, is_parallel, is_custom_gate)
-        );
+        self.nodes.push(Node::new(id, template_name, parameters, is_parallel, is_custom_gate));
         self.adjacency.push(vec![]);
         id
     }
@@ -415,13 +534,28 @@ impl DAG {
         }
     }
 
+    pub fn take_instructions(&mut self, instructions: &mut Vec<InstrStatement>) {
+        if let Option::Some(node) = self.get_mut_main() {
+            node.instructions = std::mem::take(instructions);
+        }
+    }
+
+    pub fn take_instruction_components(
+        &mut self,
+        instruction_components: &mut BTreeMap<String, usize>,
+    ) {
+        if let Option::Some(node) = self.get_mut_main() {
+            node.instruction_components = std::mem::take(instruction_components);
+        }
+    }
+
     pub fn add_underscored_signal(&mut self, signal: usize) {
         if let Option::Some(node) = self.get_mut_main() {
             node.add_underscored_signal(signal);
         }
     }
 
-    pub fn set_number_of_subcomponents_indexes(&mut self, number_scmp: usize){
+    pub fn set_number_of_subcomponents_indexes(&mut self, number_scmp: usize) {
         if let Option::Some(node) = self.get_mut_main() {
             node.set_number_of_subcomponents_indexes(number_scmp);
         }
@@ -541,6 +675,32 @@ impl DAG {
     pub fn map_to_list(self, flags: SimplificationFlags) -> ConstraintList {
         map_to_constraint_list::map(self, flags)
     }
+
+    pub fn export_instructions_json(&self, file: &str) {
+        let mut writer = std::fs::File::create(file).expect("Unable to create instructions file");
+        writeln!(writer, "{{").unwrap();
+        writeln!(writer, "\"template_instances\": {{").unwrap();
+        {
+            let mut sep = false;
+            for node in &self.nodes {
+                if sep {
+                    writeln!(writer, ",").unwrap();
+                }
+                node.export_json(&mut writer, &self.nodes);
+                sep = true;
+            }
+        }
+        writeln!(writer, "}},").unwrap();
+
+        if let Some(main) = self.get_main() {
+            writeln!(writer, "\"main\": \"{}\",", main.template_name).unwrap();
+        } else {
+            unreachable!();
+        }
+
+        writeln!(writer, "\"prime\": \"{}\"", UsefulConstants::new(&self.prime).get_p()).unwrap();
+        writeln!(writer, "}}").unwrap();
+    }
 }
 
 pub struct SimplificationFlags {
@@ -550,5 +710,5 @@ pub struct SimplificationFlags {
     pub port_substitution: bool,
     pub json_substitutions: String,
     pub flag_old_heuristics: bool,
-    pub prime : String,
+    pub prime: String,
 }

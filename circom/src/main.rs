@@ -38,11 +38,13 @@ fn start() -> Result<(), ()> {
         r1cs_flag: user_input.r1cs_flag(),
         json_constraint_flag: user_input.json_constraints_flag(),
         json_substitution_flag: user_input.json_substitutions_flag(),
+        json_instructions: user_input.json_instructions_file().to_string(),
         sym_flag: user_input.sym_flag(),
         sym: user_input.sym_file().to_string(),
         r1cs: user_input.r1cs_file().to_string(),
         json_constraints: user_input.json_constraints_file().to_string(),
         json_substitutions: user_input.json_substitutions_file().to_string(),
+        json_instruction_flag: user_input.json_instr_flag(),
         prime: user_input.prime(),        
     };
     let circuit = execution_user::execute_project(program_archive, config)?;

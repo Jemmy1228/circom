@@ -124,7 +124,7 @@ fn write_constraint_section(
         } else {
             log.no_non_linear += 1;
         }
-        ConstraintSection::write_constraint_usize(constraint_section, c.a(), c.b(), c.c())?;
+        ConstraintSection::write_constraint_usize(constraint_section, c.a(), c.b(), c.c(), &tree.field)?;
     }
     for edge in Tree::get_edges(tree) {
         let subtree = Tree::go_to_subtree(tree, edge);

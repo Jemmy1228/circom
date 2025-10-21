@@ -1,3 +1,4 @@
+use circom_algebra::algebra::ArithmeticExpression;
 use circom_algebra::num_bigint::BigInt;
 use std::collections::HashMap;
 use std::fs::File;
@@ -284,6 +285,7 @@ impl ConstraintSection {
         a: &Constraint,
         b: &Constraint,
         c: &Constraint,
+        field: &BigInt,
     ) -> Result<(), ()> {
         let field_size = self.field_size;
         let mut r1cs_a = HashMap::new();

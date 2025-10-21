@@ -10,6 +10,7 @@ pub struct ExecutionConfig {
     pub sym: String,
     pub json_constraints: String,
     pub json_substitutions: String,
+    pub json_instructions: String,
     pub no_rounds: usize,
     pub flag_s: bool,
     pub flag_f: bool,
@@ -21,6 +22,7 @@ pub struct ExecutionConfig {
     pub r1cs_flag: bool,
     pub json_substitution_flag: bool,
     pub json_constraint_flag: bool,
+    pub json_instruction_flag: bool,
     pub prime: String,
 }
 
@@ -34,6 +36,8 @@ pub fn execute_project(
         no_rounds: config.no_rounds,
         flag_json_sub: config.json_substitution_flag,
         json_substitutions: config.json_substitutions,
+        flag_json_instr: config.json_instruction_flag,
+        json_instructions: config.json_instructions,
         flag_s: config.flag_s,
         flag_f: config.flag_f,
         flag_p: config.flag_p,

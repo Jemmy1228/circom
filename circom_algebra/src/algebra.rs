@@ -6,6 +6,94 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 
+pub enum NonQuadraticExpression<C>
+where
+    C: Hash + Eq,
+{
+    Unknown,
+    PrefixOp {
+        op: String,
+        elem: Box<ArithmeticExpression<C>>,
+    },
+    InfixOp {
+        op: String,
+        left: Box<ArithmeticExpression<C>>,
+        right: Box<ArithmeticExpression<C>>,
+    },
+    InlineSwitch {
+        condition: Box<ArithmeticExpression<C>>,
+        true_case: Box<ArithmeticExpression<C>>,
+        false_case: Box<ArithmeticExpression<C>>,
+    }
+}
+
+impl<C: Default + Clone + Display + Hash + Eq + Ord> Display for NonQuadraticExpression<C> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        use NonQuadraticExpression::*;
+        let msg = match self {
+            Unknown => "Unknown".to_string(),
+            PrefixOp { op, elem } => {
+                format!("{}({})", op, elem)
+            }
+            InfixOp { op, left, right } => {
+                format!("({}) {} ({})", left, op, right)
+            }
+            InlineSwitch { condition, true_case, false_case } => {
+                format!("({}) ? ({}) : ({})", condition, true_case, false_case)
+            }
+        };
+        f.write_str(msg.as_str())
+    }
+}
+
+impl<C: Default + Clone + Display + Hash + Eq + Ord> Clone for NonQuadraticExpression<C> {
+    fn clone(&self) -> Self {
+        use NonQuadraticExpression::*;
+        match self {
+            Unknown => Unknown,
+            PrefixOp { op, elem } => PrefixOp { op: op.clone(),  elem: elem.clone() },
+            InfixOp { op, left, right } => InfixOp { op: op.clone(), left: left.clone(), right: right.clone() },
+            InlineSwitch { condition, true_case, false_case } => InlineSwitch {
+                condition: condition.clone(),
+                true_case: true_case.clone(),
+                false_case: false_case.clone()
+            },
+        }
+    }
+}
+
+impl<C: Default + Clone + Display + Hash + Eq + Ord> NonQuadraticExpression<C> {
+    fn export_json(&self) -> String {
+        use NonQuadraticExpression::*;
+        match self {
+            Unknown => "{{\"@\": \"U\"}}".to_string(),
+            PrefixOp { op, elem } => {
+                format!(
+                    "{{\"@\": \"1{}\", \"v\": [{}]}}",
+                    op,
+                    elem.export_json()
+                )
+            }
+            InfixOp { op, left, right } => {
+                format!(
+                    "{{\"@\": \"2{}\", \"v\": [{}, {}]}}",
+                    op,
+                    left.export_json(),
+                    right.export_json()
+                )
+            }
+            InlineSwitch { condition, true_case, false_case } => {
+                format!(
+                    "{{\"@\": \"3?\", \"v\": [{}, {}, {}]}}",
+                    condition.export_json(),
+                    true_case.export_json(),
+                    false_case.export_json()
+                )
+            }
+        }
+    }
+}
+
 pub enum ArithmeticExpression<C>
 where
     C: Hash + Eq,
@@ -31,17 +119,70 @@ where
         c: HashMap<C, BigInt>,
     },
     NonQuadratic {
-        repr: String, // string representation of the non-quadratic expression
-        op: u8, // operator precedence
+        expr: NonQuadraticExpression<C>,
     },
 }
+
+impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
+    pub fn export_json(&self) -> String {
+        fn hashmap_to_json_entries<C: Default + Clone + Display + Hash + Eq + Ord>(
+            coefficients: &HashMap<C, BigInt>,
+        ) -> String {
+            let coefficients = coefficients
+                .iter()
+                .filter(|(_, value)| !value.is_zero())
+                .collect::<BTreeMap<_, _>>();
+            let mut coeffs_string: String = "".to_string();
+            for (symbol, coefficient) in coefficients {
+                if !coeffs_string.is_empty() {
+                    coeffs_string.push_str(", ");
+                }
+                coeffs_string.push_str(
+                    format!(
+                        "\"{}\": \"{}\"",
+                        symbol,
+                        coefficient.to_str_radix(10)
+                    )
+                    .as_str(),
+                );
+            }
+            coeffs_string
+        }
+        use ArithmeticExpression::*;
+        match self {
+            Number { value } => {
+                if value.is_zero() {
+                    "{\"@\": \"L\", \"c\": {}}".to_string()
+                } else {
+                    format!("{{\"@\": \"L\", \"c\": {{\"\": \"{}\"}}}}", value.to_str_radix(10))
+                }
+            }
+            Signal { symbol } => {
+                format!("{{\"@\": \"L\", \"c\": {{\"{}\": \"1\"}}}}", symbol)
+            }
+            Linear { coefficients } => {
+                format!("{{\"@\": \"L\", \"c\": {{{}}}}}", hashmap_to_json_entries(coefficients))
+            }
+            Quadratic { a, b, c } => {
+                format!(
+                    "{{\"@\": \"Q\", \"a\": {{{}}}, \"b\": {{{}}}, \"c\": {{{}}}}}",
+                    hashmap_to_json_entries(a),
+                    hashmap_to_json_entries(b),
+                    hashmap_to_json_entries(c)
+                )
+            }
+            NonQuadratic { expr } => expr.export_json(),
+        }
+    }
+}
+
 impl<C: Default + Clone + Display + Hash + Eq + Ord> Display for ArithmeticExpression<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use ArithmeticExpression::*;
         let msg = match self {
             Number { value } => value.to_str_radix(10),
             Signal { symbol } => format!("{}", symbol),
-            NonQuadratic{ repr, .. } => repr.clone(),
+            NonQuadratic{ expr } => format!("{}", expr),
             Linear { coefficients } => ArithmeticExpression::string_from_coefficients(coefficients),
             Quadratic { a, b, c } => {
                 let a_string = ArithmeticExpression::string_from_coefficients(a);
@@ -62,7 +203,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Clone for ArithmeticExpress
             Signal { symbol } => Signal { symbol: symbol.clone() },
             Linear { coefficients } => Linear { coefficients: coefficients.clone() },
             Quadratic { a, b, c } => Quadratic { a: a.clone(), b: b.clone(), c: c.clone() },
-            NonQuadratic { repr, op } => NonQuadratic { repr: repr.clone() , op : *op  },
+            NonQuadratic { expr } => NonQuadratic { expr: expr.clone() }
         }
     }
 }
@@ -85,7 +226,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> PartialEq for ArithmeticExp
 
 impl<C: Default + Clone + Display + Hash + Eq + Ord> Default for ArithmeticExpression<C> {
     fn default() -> Self {
-        ArithmeticExpression::NonQuadratic{ repr: "NonQuadratic".to_string(), op: 0 }
+        ArithmeticExpression::NonQuadratic{ expr: NonQuadraticExpression::Unknown }
     }
 }
 
@@ -269,32 +410,23 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         Result::Ok(())
     }
 
-    fn nonquadratic_infix(left: &ArithmeticExpression<C>, right: &ArithmeticExpression<C>, operator: &str, op_precedence: u8) -> ArithmeticExpression<C> {
-        use ArithmeticExpression::*;
-        let (l_str, l_op) = match left {
-            NonQuadratic { repr, op } => (repr.clone(), *op),
-            Signal {..} | Number {..} => (format!("{}", left), 1),
-            _ => (format!("{}", left), 5)
-        };
-        let (r_str, r_op) = match right {
-            NonQuadratic { repr, op } => (repr.clone(), *op),
-            Signal {..} | Number {..} => (format!("{}", right), 1),
-            _ => (format!("{}", right), 5)
-        };
-        let left = if l_op > op_precedence { format!("({})", l_str) } else { l_str };
-        let right = if op_precedence <= r_op { format!("({})", r_str) } else { r_str };
-        NonQuadratic { repr: format!("{} {} {}", left, operator, right), op: op_precedence }
+    fn nonquadratic_infix(left: &ArithmeticExpression<C>, right: &ArithmeticExpression<C>, operator: &str) -> ArithmeticExpression<C> {
+        ArithmeticExpression::NonQuadratic {
+            expr: NonQuadraticExpression::InfixOp {
+                op: operator.to_string(),
+                left: Box::new(left.clone()),
+                right: Box::new(right.clone()),
+            },
+        }
     }
 
-    fn nonquadratic_prefix(operator: &str, elem: &ArithmeticExpression<C>, op_precedence: u8) -> ArithmeticExpression<C> {
-        use ArithmeticExpression::*;
-        let (r_str, r_op) = match elem {
-            NonQuadratic { repr, op } => (repr.clone(), *op),
-            Signal {..} | Number {..} => (format!("{}", elem), 1),
-            _ => (format!("{}", elem), 5)
-        };
-        let right = if op_precedence <= r_op { format!("({})", r_str) } else { r_str };
-        NonQuadratic { repr: format!("{}{}", operator, right), op: op_precedence }
+    fn nonquadratic_prefix(operator: &str, elem: &ArithmeticExpression<C>) -> ArithmeticExpression<C> {
+        ArithmeticExpression::NonQuadratic {
+            expr: NonQuadraticExpression::PrefixOp {
+                op: operator.to_string(),
+                elem: Box::new(elem.clone()),
+            },
+        }
     }
 
     pub fn add(
@@ -305,7 +437,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
         match (left, right) {
             (NonQuadratic { .. }, _) | (_, NonQuadratic { .. }) | (Quadratic { .. }, Quadratic { .. }) => {
-                ArithmeticExpression::nonquadratic_infix(left, right, "+", 5)
+                ArithmeticExpression::nonquadratic_infix(left, right, "+")
             }
             (Number { value: v_0 }, Number { value: v_1 }) => {
                 Number { value: modular_arithmetic::add(v_0, v_1, field) }
@@ -413,7 +545,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             | (Linear { .. }, Quadratic { .. })
             | (Quadratic { .. }, Signal { .. })
             | (Signal { .. }, Quadratic { .. }) => {
-                ArithmeticExpression::nonquadratic_infix(left, right, "*", 4)
+                ArithmeticExpression::nonquadratic_infix(left, right, "*")
             }
             (Number { value: value_0 }, Number { value: value_1 }) => {
                 Number { value: modular_arithmetic::mul(value_0, value_1, field) }
@@ -549,7 +681,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                 Result::Ok(Quadratic { a, b, c })
             }
             _ => {
-                Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "/", 4))
+                Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "/"))
             }
         }
     }
@@ -565,7 +697,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                 Result::Ok(Number { value })
             }
             _ => {
-                Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "//", 4))
+                Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "\\"))
             }
         }
     }
@@ -579,7 +711,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::mod_op(value_0, value_1, field)?;
             Result::Ok(Number { value })
         } else {
-            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "%", 4))
+            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "%"))
         }
     }
     pub fn pow(
@@ -604,7 +736,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                 ArithmeticExpression::mul(&left, &right, field)
             }
             _ => {
-                ArithmeticExpression::nonquadratic_infix(left, right, "**", 3)
+                ArithmeticExpression::nonquadratic_infix(left, right, "**")
             }
         }
     }
@@ -623,7 +755,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         if let Number { value } = elem {
             Number { value: modular_arithmetic::complement(value, field) }
         } else {
-            ArithmeticExpression::nonquadratic_prefix("~", elem, 2)
+            ArithmeticExpression::nonquadratic_prefix("~", elem)
         }
     }
 
@@ -637,7 +769,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let shifted_elem = modular_arithmetic::shift_l(value_0, value_1, field)?;
             Result::Ok(Number { value: shifted_elem })
         } else {
-            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "<<", 6))
+            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "<<"))
         }
     }
     pub fn shift_r(
@@ -650,7 +782,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let shifted_elem = modular_arithmetic::shift_r(value_0, value_1, field)?;
             Result::Ok(Number { value: shifted_elem })
         } else {
-            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, ">>", 6))
+            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, ">>"))
         }
     }
     pub fn bit_or(
@@ -663,7 +795,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::bit_or(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "|", 9)
+            ArithmeticExpression::nonquadratic_infix(left, right, "|")
         }
     }
     pub fn bit_and(
@@ -676,7 +808,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::bit_and(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "&", 7)
+            ArithmeticExpression::nonquadratic_infix(left, right, "&")
         }
     }
     pub fn bit_xor(
@@ -689,7 +821,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::bit_xor(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "^", 8)
+            ArithmeticExpression::nonquadratic_infix(left, right, "^")
         }
     }
 
@@ -708,7 +840,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::not(value, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_prefix("!", elem, 2)
+            ArithmeticExpression::nonquadratic_prefix("!", elem)
         }
     }
     pub fn bool_or(
@@ -721,7 +853,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::bool_or(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "||", 12)
+            ArithmeticExpression::nonquadratic_infix(left, right, "||")
         }
     }
     pub fn bool_and(
@@ -734,7 +866,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::bool_and(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "&&", 11)
+            ArithmeticExpression::nonquadratic_infix(left, right, "&&")
         }
     }
     pub fn eq(
@@ -747,7 +879,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::eq(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "==", 10)
+            ArithmeticExpression::nonquadratic_infix(left, right, "==")
         }
     }
     pub fn not_eq(
@@ -760,7 +892,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::not_eq(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "!=", 10)
+            ArithmeticExpression::nonquadratic_infix(left, right, "!=")
         }
     }
     pub fn lesser(
@@ -773,7 +905,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::lesser(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "<", 10)
+            ArithmeticExpression::nonquadratic_infix(left, right, "<")
         }
     }
     pub fn lesser_eq(
@@ -786,7 +918,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::lesser_eq(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "<=", 10)
+            ArithmeticExpression::nonquadratic_infix(left, right, "<=")
         }
     }
     pub fn greater(
@@ -799,7 +931,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::greater(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, ">", 10)
+            ArithmeticExpression::nonquadratic_infix(left, right, ">")
         }
     }
     pub fn greater_eq(
@@ -812,7 +944,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let value = modular_arithmetic::greater_eq(value_0, value_1, field);
             Number { value }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, ">=", 10)
+            ArithmeticExpression::nonquadratic_infix(left, right, ">=")
         }
     }
 

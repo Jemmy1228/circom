@@ -23,7 +23,7 @@ pub fn port_r1cs(list: &ConstraintList, output: &str, custom_gates: bool) -> Res
     for c_id in list.constraints.get_ids() {
         let c = list.constraints.read_constraint(c_id).unwrap();
         let c = C::apply_correspondence(&c, &list.signal_map);
-        ConstraintSection::write_constraint_usize(&mut constraint_section, c.a(), c.b(), c.c())?;
+        ConstraintSection::write_constraint_usize(&mut constraint_section, c.a(), c.b(), c.c(), &list.field)?;
         if C::is_linear(&c) {
             log.no_linear += 1;
         } else {

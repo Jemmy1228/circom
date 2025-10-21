@@ -3,9 +3,11 @@ use super::type_definitions::*;
 use super::ExecutedBus;
 use circom_algebra::algebra::ArithmeticExpression;
 use compiler::hir::very_concrete_program::*;
+use dag::InstrStatement;
 use dag::DAG;
 use num_bigint::BigInt;
 use program_structure::ast::{SignalType, Statement};
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use crate::execution_data::AExpressionSlice;
 
@@ -70,6 +72,8 @@ pub struct ExecutedTemplate {
     pub intermediates: WireCollector,
     pub ordered_signals: WireCollector,
     pub constraints: Vec<Constraint>,
+    pub instructions: Vec<InstrStatement>,
+    pub instruction_components: BTreeMap<String, usize>,
     pub components: ComponentCollector,
     pub number_of_components: usize,
     pub public_inputs: HashSet<String>,
@@ -118,7 +122,9 @@ impl ExecutedTemplate {
             intermediates: WireCollector::new(),
             ordered_signals: WireCollector::new(),
             constraints: Vec::new(),
+            instructions: Vec::new(),
             components: ComponentCollector::new(),
+            instruction_components: BTreeMap::new(),
             number_of_components: 0,
             connexions: Vec::new(),
             bus_connexions: HashMap::new(),
@@ -215,6 +221,22 @@ impl ExecutedTemplate {
         self.constraints.push(constraint);
     }
 
+    pub fn add_instr_assign(&mut self, symbol: &ArithmeticExpression<String>, value: &ArithmeticExpression<String>) {
+        self.instructions.push(InstrStatement::Assign { symbol: symbol.clone(), expr: value.clone() });
+    }
+
+    pub fn add_instr_hint(&mut self, symbol: &ArithmeticExpression<String>, value: &ArithmeticExpression<String>) {
+        self.instructions.push(InstrStatement::Hint { symbol: symbol.clone(), expr: value.clone() });
+    }
+
+    pub fn add_instr_constraint(&mut self, left: &ArithmeticExpression<String>, right: &ArithmeticExpression<String>) {
+        self.instructions.push(InstrStatement::Constraint { left: left.clone(), right: right.clone() });
+    }
+
+    pub fn add_instr_component(&mut self, symbol: &String, node_pointer: usize) {
+        self.instruction_components.insert(symbol.clone(), node_pointer);
+    }
+
     pub fn add_underscored_signal(&mut self, signal: &str) {
         self.underscored_signals.push(signal.to_string());
     }
@@ -265,6 +287,7 @@ impl ExecutedTemplate {
         self.build_ordered_signals(dag, buses_info);
         self.build_connexions(dag);
         self.build_constraints(dag);
+        self.build_instructions(dag);
     }
 
     fn build_wires(&self, dag: &mut DAG, buses_info : &Vec<ExecutedBus>) {
@@ -358,6 +381,10 @@ impl ExecutedTemplate {
             let new_s = correspondence.get(s).unwrap().clone();
             dag.add_underscored_signal(new_s);
         }
+    }
+    fn build_instructions(&mut self, dag: &mut DAG) {
+        dag.take_instructions(&mut self.instructions);
+        dag.take_instruction_components(&mut self.instruction_components);
     }
 
     pub fn export_to_circuit(self, instances: &mut [TemplateInstance], buses_info : &Vec<BusInstance>) -> TemplateInstance {

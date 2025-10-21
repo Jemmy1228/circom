@@ -20,12 +20,15 @@ use program_structure::error_code::ReportCode;
 use program_structure::error_definition::{Report, ReportCollection};
 use program_structure::file_definition::FileID;
 use program_structure::program_archive::ProgramArchive;
+use std::fs::File;
 use std::rc::Rc;
 
 pub struct BuildConfig {
     pub no_rounds: usize,
     pub flag_json_sub: bool,
     pub json_substitutions: String,
+    pub flag_json_instr: bool,
+    pub json_instructions: String,
     pub flag_s: bool,
     pub flag_f: bool,
     pub flag_p: bool,
@@ -59,6 +62,11 @@ pub fn build_circuit(program: ProgramArchive, config: BuildConfig) -> BuildRespo
     if config.inspect_constraints {
         Report::print_reports(&warnings, &files);
     }
+
+    if config.flag_json_instr {
+        dag.export_instructions_json(&config.json_instructions);
+    }
+
     if config.flag_f {
         sync_dag_and_vcp(&mut vcp, &mut dag);
         if config.flag_json_sub { 
