@@ -66,17 +66,17 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> NonQuadraticExpression<C> {
     fn export_json(&self) -> String {
         use NonQuadraticExpression::*;
         match self {
-            Unknown => "{{\"@\": \"U\"}}".to_string(),
+            Unknown => "{{\"@\":\"U\"}}".to_string(),
             PrefixOp { op, elem } => {
                 format!(
-                    "{{\"@\": \"1{}\", \"v\": [{}]}}",
+                    "{{\"@\":\"1{}\",\"v\":[{}]}}",
                     op,
                     elem.export_json()
                 )
             }
             InfixOp { op, left, right } => {
                 format!(
-                    "{{\"@\": \"2{}\", \"v\": [{}, {}]}}",
+                    "{{\"@\":\"2{}\",\"v\":[{},{}]}}",
                     op,
                     left.export_json(),
                     right.export_json()
@@ -84,7 +84,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> NonQuadraticExpression<C> {
             }
             InlineSwitch { condition, true_case, false_case } => {
                 format!(
-                    "{{\"@\": \"3?\", \"v\": [{}, {}, {}]}}",
+                    "{{\"@\":\"3?\",\"v\":[{},{},{}]}}",
                     condition.export_json(),
                     true_case.export_json(),
                     false_case.export_json()
@@ -135,11 +135,11 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             let mut coeffs_string: String = "".to_string();
             for (symbol, coefficient) in coefficients {
                 if !coeffs_string.is_empty() {
-                    coeffs_string.push_str(", ");
+                    coeffs_string.push_str(",");
                 }
                 coeffs_string.push_str(
                     format!(
-                        "\"{}\": \"{}\"",
+                        "\"{}\":\"{}\"",
                         symbol,
                         coefficient.to_str_radix(10)
                     )
@@ -152,20 +152,20 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         match self {
             Number { value } => {
                 if value.is_zero() {
-                    "{\"@\": \"L\", \"c\": {}}".to_string()
+                    "{\"@\":\"L\",\"c\":{}}".to_string()
                 } else {
-                    format!("{{\"@\": \"L\", \"c\": {{\"\": \"{}\"}}}}", value.to_str_radix(10))
+                    format!("{{\"@\":\"L\",\"c\":{{\"\":\"{}\"}}}}", value.to_str_radix(10))
                 }
             }
             Signal { symbol } => {
-                format!("{{\"@\": \"L\", \"c\": {{\"{}\": \"1\"}}}}", symbol)
+                format!("{{\"@\":\"L\",\"c\":{{\"{}\":\"1\"}}}}", symbol)
             }
             Linear { coefficients } => {
-                format!("{{\"@\": \"L\", \"c\": {{{}}}}}", hashmap_to_json_entries(coefficients))
+                format!("{{\"@\":\"L\",\"c\":{{{}}}}}", hashmap_to_json_entries(coefficients))
             }
             Quadratic { a, b, c } => {
                 format!(
-                    "{{\"@\": \"Q\", \"a\": {{{}}}, \"b\": {{{}}}, \"c\": {{{}}}}}",
+                    "{{\"@\":\"Q\",\"a\":{{{}}},\"b\":{{{}}},\"c\":{{{}}}}}",
                     hashmap_to_json_entries(a),
                     hashmap_to_json_entries(b),
                     hashmap_to_json_entries(c)

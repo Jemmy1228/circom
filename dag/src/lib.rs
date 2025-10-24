@@ -48,13 +48,13 @@ impl InstrStatement {
     pub fn export_json(&self) -> String {
         match self {
             InstrStatement::Assign { symbol, expr } => {
-                format!("{{\"$\":\"A\",\"s\":\"{}\",\"e\": {}}}", symbol, expr.export_json())
+                format!("{{\"$\":\"A\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.export_json())
             }
             InstrStatement::Hint { symbol, expr } => {
-                format!("{{\"$\":\"H\",\"s\":\"{}\",\"e\": {}}}", symbol, expr.export_json())
+                format!("{{\"$\":\"H\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.export_json())
             }
             InstrStatement::Constraint { left, right } => {
-                format!("{{\"$\":\"C\",\"l\": {},\"r\": {}}}", left.export_json(), right.export_json())
+                format!("{{\"$\":\"C\",\"l\":{},\"r\":{}}}", left.export_json(), right.export_json())
             }
         }
     }
@@ -352,8 +352,8 @@ impl Node {
     pub fn export_json(&self, writer: &mut dyn Write, nodes: &Vec<Node>) {
         // buffer.push_str(&format!("\"{}\": {{\n", self.template_name));
 
-        writeln!(writer, "\"{}\": {{", self.template_name).unwrap();
-        write!(writer, "\"parameters\": [").unwrap();
+        writeln!(writer, "\"{}\":{{", self.template_name).unwrap();
+        write!(writer, "\"parameters\":[").unwrap();
         if self.parameters.is_empty() {
             writeln!(writer, "],").unwrap();
         } else {
@@ -369,7 +369,7 @@ impl Node {
             writeln!(writer, "\n],").unwrap();
         }
 
-        write!(writer, "\"signals\": {{").unwrap();
+        write!(writer, "\"signals\":{{").unwrap();
         if self.ordered_signals.is_empty() {
             writeln!(writer, "}},").unwrap();
         } else {
@@ -379,13 +379,13 @@ impl Node {
                 if sep {
                     writeln!(writer, ",").unwrap();
                 }
-                write!(writer, "\"{}\": \"{}\"", symbol, self.signal_types[symbol]).unwrap();
+                write!(writer, "\"{}\":\"{}\"", symbol, self.signal_types[symbol]).unwrap();
                 sep = true;
             }
             writeln!(writer, "\n}},").unwrap();
         }
 
-        write!(writer, "\"subcomponents\": {{").unwrap();
+        write!(writer, "\"subcomponents\":{{").unwrap();
         if self.instruction_components.is_empty() {
             writeln!(writer, "}},").unwrap();
         } else {
@@ -395,13 +395,13 @@ impl Node {
                 if sep {
                     writeln!(writer, ",").unwrap();
                 }
-                write!(writer, "\"{}\": \"{}\"", name, nodes[*id].template_name).unwrap();
+                write!(writer, "\"{}\":\"{}\"", name, nodes[*id].template_name).unwrap();
                 sep = true;
             }
             writeln!(writer, "}},").unwrap();
         }
 
-        write!(writer, "\"instructions\": [").unwrap();
+        write!(writer, "\"instructions\":[").unwrap();
         if self.instructions.is_empty() {
             writeln!(writer, "]").unwrap();
         } else {
@@ -679,7 +679,7 @@ impl DAG {
     pub fn export_instructions_json(&self, file: &str) {
         let mut writer = std::fs::File::create(file).expect("Unable to create instructions file");
         writeln!(writer, "{{").unwrap();
-        writeln!(writer, "\"template_instances\": {{").unwrap();
+        writeln!(writer, "\"template_instances\":{{").unwrap();
         {
             let mut sep = false;
             for node in &self.nodes {
@@ -693,12 +693,12 @@ impl DAG {
         writeln!(writer, "}},").unwrap();
 
         if let Some(main) = self.get_main() {
-            writeln!(writer, "\"main\": \"{}\",", main.template_name).unwrap();
+            writeln!(writer, "\"main\":\"{}\",", main.template_name).unwrap();
         } else {
             unreachable!();
         }
 
-        writeln!(writer, "\"prime\": \"{}\"", UsefulConstants::new(&self.prime).get_p()).unwrap();
+        writeln!(writer, "\"prime\":\"{}\"", UsefulConstants::new(&self.prime).get_p()).unwrap();
         writeln!(writer, "}}").unwrap();
     }
 }
