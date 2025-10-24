@@ -5,6 +5,7 @@ use super::executed_bus::ExecutedBus;
 
 use super::type_definitions::*;
 use compiler::hir::very_concrete_program::{Stats, VCPConfig, VCP};
+use constraint_writers::json_writer;
 use dag::DAG;
 use program_structure::program_archive::ProgramArchive;
 use program_structure::program_library::error_definition::ReportCollection;

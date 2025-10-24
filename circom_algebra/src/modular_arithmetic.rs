@@ -33,17 +33,17 @@ fn mask(field: &BigInt) -> BigInt {
 pub fn add(left: &BigInt, right: &BigInt, field: &BigInt) -> BigInt {
     //let left = modulus(left,field);
     //let right = modulus(right,field);
-    modulus_field(&(left + right), field)
+    modulus(&(left + right), field)
 }
 pub fn mul(left: &BigInt, right: &BigInt, field: &BigInt) -> BigInt {
     //let left = modulus(left,field);
     //let right = modulus(right,field);
-    modulus_field(&(left * right), field)
+    modulus(&(left * right), field)
 }
 pub fn sub(left: &BigInt, right: &BigInt, field: &BigInt) -> BigInt {
     //let left = modulus(left,field);
     //let right = modulus(right,field);
-    modulus_field(&(left - right), field)
+    modulus(&(left - right), field)
 }
 pub fn div(left: &BigInt, right: &BigInt, field: &BigInt) -> Result<BigInt, ArithmeticError> {
     let right_inverse = right

@@ -9,6 +9,7 @@ use num_bigint::BigInt;
 use program_structure::ast::{SignalType, Statement};
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 use crate::execution_data::AExpressionSlice;
 
 
@@ -265,6 +266,82 @@ impl ExecutedTemplate {
         &self.intermediates
     }
 
+    pub fn export_json(&mut self, writer: &mut dyn Write, templates_info: &Vec<ExecutedTemplate>, buses_info : &Vec<ExecutedBus>) {
+        writeln!(writer, "\"{}\":{{", self.report_name).unwrap();
+        writeln!(writer, "\"template\":\"{}\",", self.template_name).unwrap();
+
+        write!(writer, "\"parameters\":[").unwrap();
+        {
+            let mut first = true;
+            for (_, data) in self.parameter_instances.clone() {
+                let (_, values) = data.destruct();
+                for value in as_big_int(values) {
+                    if !first {
+                        write!(writer, ",").unwrap();
+                    }
+                    write!(writer, "{}", value).unwrap();
+                    first = false;
+                }
+            }
+            writeln!(writer, "],").unwrap();
+        }
+
+        writeln!(writer, "\"is_parallel\" : {},", self.is_parallel).unwrap();
+
+        let mut signals = BTreeMap::new();
+        self.insert_wires(&mut signals, buses_info);
+
+        writeln!(writer, "\"signals\":{{").unwrap();
+        {
+            let mut first = true;
+            for (name, xtype) in &signals {
+                if !first {
+                    writeln!(writer, ",").unwrap();
+                }
+                write!(writer, "\"{}\":\"{}\"", name, xtype).unwrap();
+                first = false;
+            }
+            writeln!(writer).unwrap();
+            writeln!(writer, "}},").unwrap();
+        }
+        std::mem::drop(signals);
+
+        write!(writer, "\"subcomponents\":{{").unwrap();
+        if self.instruction_components.is_empty() {
+            writeln!(writer, "}},").unwrap();
+        } else {
+            let mut first = true;
+            for (name, node_pointer) in &self.instruction_components {
+                if !first {
+                    writeln!(writer, ",").unwrap();
+                }
+                write!(writer, "\"{}\":\"{}\"", name, templates_info[*node_pointer].report_name).unwrap();
+                first = false;
+            }
+            writeln!(writer).unwrap();
+            writeln!(writer, "}},").unwrap();
+        }
+        self.instruction_components = BTreeMap::new(); // free memory
+
+        writeln!(writer, "\"instructions\":[").unwrap();
+        {
+            let mut first = true;
+            for instr in &self.instructions {
+                if !first {
+                    writeln!(writer, ",").unwrap();
+                }
+                write!(writer, "{}", instr.to_json()).unwrap();
+                first = false;
+            }
+            writeln!(writer).unwrap();
+            writeln!(writer, "]").unwrap();
+        }
+        self.instruction_components = BTreeMap::new(); // free memory
+
+        write!(writer, "}}").unwrap();
+        writer.flush().unwrap();
+    }
+
     pub fn insert_in_dag(&mut self, dag: &mut DAG, buses_info : &Vec<ExecutedBus>) {
         let parameters = {
             let mut parameters = vec![];
@@ -287,7 +364,49 @@ impl ExecutedTemplate {
         self.build_ordered_signals(dag, buses_info);
         self.build_connexions(dag);
         self.build_constraints(dag);
-        self.build_instructions(dag);
+    }
+
+    fn insert_wires(&self, result: &mut BTreeMap<String, char>, buses_info : &Vec<ExecutedBus>) {
+        for wire_data in self.outputs() {
+            let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
+            let config = SignalConfig { signal_type: 1, dimensions: &wire_data.length, is_public: false };
+            if wire_data.is_bus{
+                insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+            } else{
+                insert_symbols(result, state, &config);
+            }
+        }
+        for wire_data in self.inputs() {
+            if self.public_inputs.contains(&wire_data.name) {
+                let state = State { basic_name: wire_data.name.clone(),  name: wire_data.name.clone(), dim: 0 };
+                let config = SignalConfig { signal_type: 0, dimensions: &wire_data.length, is_public: true };
+                if wire_data.is_bus{
+                    insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                } else{
+                    insert_symbols(result, state, &config);
+                }
+            }
+        }
+        for wire_data in self.inputs() {
+            if !self.public_inputs.contains(&wire_data.name) {
+                let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
+                let config = SignalConfig { signal_type: 0, dimensions: &wire_data.length, is_public: false };
+                if wire_data.is_bus{
+                    insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                } else{
+                    insert_symbols(result, state, &config);
+                }
+            }
+        }
+        for wire_data in self.intermediates() {
+            let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
+            let config = SignalConfig { signal_type: 2, dimensions: &wire_data.length, is_public: false };
+            if wire_data.is_bus{
+                insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+            } else{
+                insert_symbols(result, state, &config);
+            }
+        }
     }
 
     fn build_wires(&self, dag: &mut DAG, buses_info : &Vec<ExecutedBus>) {
@@ -381,10 +500,6 @@ impl ExecutedTemplate {
             let new_s = correspondence.get(s).unwrap().clone();
             dag.add_underscored_signal(new_s);
         }
-    }
-    fn build_instructions(&mut self, dag: &mut DAG) {
-        dag.take_instructions(&mut self.instructions);
-        dag.take_instruction_components(&mut self.instruction_components);
     }
 
     pub fn export_to_circuit(self, instances: &mut [TemplateInstance], buses_info : &Vec<BusInstance>) -> TemplateInstance {
@@ -594,6 +709,50 @@ struct State {
     basic_name: String, //Only name without array accesses [].
     name: String, //Full name with array accesses.
     dim: usize,
+}
+fn insert_symbols(result: &mut BTreeMap<String, char>, state: State, config: &SignalConfig) {
+    if state.dim == config.dimensions.len() {
+        if config.signal_type == 0 {
+            result.insert(state.name, if config.is_public { 'p' } else { 'i' });
+        } else if config.signal_type == 1 {
+            result.insert(state.name, 'o');
+        } else if config.signal_type == 2 {
+            result.insert(state.name, 't');
+        }
+    } else {
+        let mut index = 0;
+        while index < config.dimensions[state.dim] {
+            let new_state =
+                State { basic_name: state.basic_name.clone(), name: format!("{}[{}]", state.name, index), dim: state.dim + 1 };
+            insert_symbols(result, new_state, config);
+            index += 1;
+        }
+    }
+}
+fn insert_bus_symbols(result: &mut BTreeMap<String, char>, state: State, config: &SignalConfig, bus_connexions: &HashMap<String, BusConnexion>, buses: &Vec<ExecutedBus>) {
+    let bus_connection = bus_connexions.get(&state.basic_name).unwrap();
+    let ex_bus2 = buses.get(bus_connection.inspect.goes_to).unwrap();
+    if state.dim == config.dimensions.len() {
+        for info_field in ex_bus2.fields(){
+            let signal_name = format!("{}.{}",state.name, info_field.name);
+            let state = State { basic_name: info_field.name.clone(), name: signal_name, dim: 0 };
+            let config = SignalConfig { signal_type: config.signal_type, dimensions: &info_field.length, is_public: config.is_public };
+            if info_field.is_bus{
+                insert_bus_symbols(result, state, &config, ex_bus2.bus_connexions(), buses);
+            } else{
+                insert_symbols(result, state, &config);
+            }
+        }
+
+    } else {
+        let mut index = 0;
+        while index < config.dimensions[state.dim] {
+            let new_state =
+                State { basic_name: state.basic_name.clone(), name: format!("{}[{}]", state.name, index), dim: state.dim + 1 };
+            insert_bus_symbols(result, new_state, config, bus_connexions, buses);
+            index += 1;
+        }
+    }
 }
 fn generate_symbols(dag: &mut DAG, state: State, config: &SignalConfig) {
     if state.dim == config.dimensions.len() {

@@ -45,16 +45,16 @@ impl std::fmt::Display for InstrStatement {
 }
 
 impl InstrStatement {
-    pub fn export_json(&self) -> String {
+    pub fn to_json(&self) -> String {
         match self {
             InstrStatement::Assign { symbol, expr } => {
-                format!("{{\"$\":\"A\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.export_json())
+                format!("{{\"$\":\"A\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.to_json())
             }
             InstrStatement::Hint { symbol, expr } => {
-                format!("{{\"$\":\"H\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.export_json())
+                format!("{{\"$\":\"H\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.to_json())
             }
             InstrStatement::Constraint { left, right } => {
-                format!("{{\"$\":\"C\",\"l\":{},\"r\":{}}}", left.export_json(), right.export_json())
+                format!("{{\"$\":\"C\",\"l\":{},\"r\":{}}}", left.to_json(), right.to_json())
             }
         }
     }
@@ -195,12 +195,9 @@ pub struct Node {
     ordered_signals: Vec<String>,
     locals: HashSet<usize>,
     reachables: HashSet<usize>, // locals and io of subcomponents
-    signal_types: HashMap<String, char>,
     forbidden_if_main: HashSet<usize>,
     io_signals: Vec<usize>,
     constraints: Vec<Constraint>,
-    instructions: Vec<InstrStatement>,
-    instruction_components: BTreeMap<String, usize>,
     underscored_signals: Vec<usize>,
     is_parallel: bool,
     has_parallel_sub_cmp: bool,
@@ -232,7 +229,6 @@ impl Node {
     fn add_input(&mut self, name: String, is_public: bool) {
         let id = self.number_of_signals + 1;
         self.io_signals.push(id);
-        self.signal_types.insert(name.clone(), if is_public { 'p' } else { 'i' });
         self.public_inputs_length += if is_public { 1 } else { 0 };
         self.signal_correspondence.insert(name, id);
         self.locals.insert(id);
@@ -248,7 +244,6 @@ impl Node {
     fn add_output(&mut self, name: String) {
         let id = self.number_of_signals + 1;
         self.io_signals.push(id);
-        self.signal_types.insert(name.clone(), 'o');
         self.signal_correspondence.insert(name, id);
         self.forbidden_if_main.insert(id);
         self.locals.insert(id);
@@ -260,7 +255,6 @@ impl Node {
 
     fn add_intermediate(&mut self, name: String) {
         let id = self.number_of_signals + 1;
-        self.signal_types.insert(name.clone(), 't');
         self.signal_correspondence.insert(name, id);
         self.locals.insert(id);
         self.reachables.insert(id);
@@ -347,76 +341,6 @@ impl Node {
 
     pub fn number_of_subcomponents_indexes(&self) -> usize {
         self.number_of_subcomponents_indexes
-    }
-
-    pub fn export_json(&self, writer: &mut dyn Write, nodes: &Vec<Node>) {
-        // buffer.push_str(&format!("\"{}\": {{\n", self.template_name));
-
-        writeln!(writer, "\"{}\":{{", self.template_name).unwrap();
-        write!(writer, "\"parameters\":[").unwrap();
-        if self.parameters.is_empty() {
-            writeln!(writer, "],").unwrap();
-        } else {
-            let mut sep = false;
-            writeln!(writer).unwrap();
-            for param in &self.parameters {
-                if sep {
-                    writeln!(writer, ",").unwrap();
-                }
-                write!(writer, "{}", param).unwrap();
-                sep = true;
-            }
-            writeln!(writer, "\n],").unwrap();
-        }
-
-        write!(writer, "\"signals\":{{").unwrap();
-        if self.ordered_signals.is_empty() {
-            writeln!(writer, "}},").unwrap();
-        } else {
-            let mut sep = false;
-            writeln!(writer).unwrap();
-            for symbol in &self.ordered_signals {
-                if sep {
-                    writeln!(writer, ",").unwrap();
-                }
-                write!(writer, "\"{}\":\"{}\"", symbol, self.signal_types[symbol]).unwrap();
-                sep = true;
-            }
-            writeln!(writer, "\n}},").unwrap();
-        }
-
-        write!(writer, "\"subcomponents\":{{").unwrap();
-        if self.instruction_components.is_empty() {
-            writeln!(writer, "}},").unwrap();
-        } else {
-            let mut sep = false;
-            writeln!(writer).unwrap();
-            for (name, id) in &self.instruction_components {
-                if sep {
-                    writeln!(writer, ",").unwrap();
-                }
-                write!(writer, "\"{}\":\"{}\"", name, nodes[*id].template_name).unwrap();
-                sep = true;
-            }
-            writeln!(writer, "}},").unwrap();
-        }
-
-        write!(writer, "\"instructions\":[").unwrap();
-        if self.instructions.is_empty() {
-            writeln!(writer, "]").unwrap();
-        } else {
-            let mut sep = false;
-            writeln!(writer).unwrap();
-            for instr in &self.instructions {
-                if sep {
-                    writeln!(writer, ",").unwrap();
-                }
-                write!(writer, "{}", instr.export_json()).unwrap();
-                sep = true;
-            }
-            writeln!(writer, "\n]").unwrap();
-        }
-        writeln!(writer, "}}").unwrap();
     }
 }
 
@@ -531,21 +455,6 @@ impl DAG {
     pub fn add_constraint(&mut self, constraint: Constraint) {
         if let Option::Some(node) = self.get_mut_main() {
             node.add_constraint(constraint);
-        }
-    }
-
-    pub fn take_instructions(&mut self, instructions: &mut Vec<InstrStatement>) {
-        if let Option::Some(node) = self.get_mut_main() {
-            node.instructions = std::mem::take(instructions);
-        }
-    }
-
-    pub fn take_instruction_components(
-        &mut self,
-        instruction_components: &mut BTreeMap<String, usize>,
-    ) {
-        if let Option::Some(node) = self.get_mut_main() {
-            node.instruction_components = std::mem::take(instruction_components);
         }
     }
 
@@ -674,32 +583,6 @@ impl DAG {
 
     pub fn map_to_list(self, flags: SimplificationFlags) -> ConstraintList {
         map_to_constraint_list::map(self, flags)
-    }
-
-    pub fn export_instructions_json(&self, file: &str) {
-        let mut writer = std::fs::File::create(file).expect("Unable to create instructions file");
-        writeln!(writer, "{{").unwrap();
-        writeln!(writer, "\"template_instances\":{{").unwrap();
-        {
-            let mut sep = false;
-            for node in &self.nodes {
-                if sep {
-                    writeln!(writer, ",").unwrap();
-                }
-                node.export_json(&mut writer, &self.nodes);
-                sep = true;
-            }
-        }
-        writeln!(writer, "}},").unwrap();
-
-        if let Some(main) = self.get_main() {
-            writeln!(writer, "\"main\":\"{}\",", main.template_name).unwrap();
-        } else {
-            unreachable!();
-        }
-
-        writeln!(writer, "\"prime\":\"{}\"", UsefulConstants::new(&self.prime).get_p()).unwrap();
-        writeln!(writer, "}}").unwrap();
     }
 }
 

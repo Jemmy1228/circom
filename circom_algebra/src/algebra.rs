@@ -63,31 +63,31 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Clone for NonQuadraticExpre
 }
 
 impl<C: Default + Clone + Display + Hash + Eq + Ord> NonQuadraticExpression<C> {
-    fn export_json(&self) -> String {
+    fn to_json(&self) -> String {
         use NonQuadraticExpression::*;
         match self {
-            Unknown => "{{\"@\":\"U\"}}".to_string(),
+            Unknown => format!("{{\"@\":\"U\"}}"),
             PrefixOp { op, elem } => {
                 format!(
                     "{{\"@\":\"1{}\",\"v\":[{}]}}",
                     op,
-                    elem.export_json()
+                    elem.to_json()
                 )
             }
             InfixOp { op, left, right } => {
                 format!(
                     "{{\"@\":\"2{}\",\"v\":[{},{}]}}",
                     op,
-                    left.export_json(),
-                    right.export_json()
+                    left.to_json(),
+                    right.to_json()
                 )
             }
             InlineSwitch { condition, true_case, false_case } => {
                 format!(
                     "{{\"@\":\"3?\",\"v\":[{},{},{}]}}",
-                    condition.export_json(),
-                    true_case.export_json(),
-                    false_case.export_json()
+                    condition.to_json(),
+                    true_case.to_json(),
+                    false_case.to_json()
                 )
             }
         }
@@ -124,7 +124,7 @@ where
 }
 
 impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
-    pub fn export_json(&self) -> String {
+    pub fn to_json(&self) -> String {
         fn hashmap_to_json_entries<C: Default + Clone + Display + Hash + Eq + Ord>(
             coefficients: &HashMap<C, BigInt>,
         ) -> String {
@@ -171,7 +171,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     hashmap_to_json_entries(c)
                 )
             }
-            NonQuadratic { expr } => expr.export_json(),
+            NonQuadratic { expr } => expr.to_json(),
         }
     }
 }

@@ -30,7 +30,7 @@ use super::{
     ast::*, ArithmeticError, FileID, ProgramArchive, Report, ReportCode, ReportCollection
 };
 use circom_algebra::num_bigint::BigInt;
-use std::collections::{HashMap, BTreeMap};
+use std::{collections::{BTreeMap, HashMap}, io::Write};
 use crate::FlagsExecution;
 type AExpr = ArithmeticExpressionGen<String>;
 type AnonymousComponentsInfo = BTreeMap<String, (Meta, Vec<Expression>)>;
@@ -54,9 +54,10 @@ struct RuntimeInformation {
     pub environment: ExecutionEnvironment,
     pub exec_program: ExecutedProgram,
     pub anonymous_components: AnonymousComponentsInfo,
+    pub json_writer: Option<Box<dyn Write>>,
 }
 impl RuntimeInformation {
-    pub fn new(current_file: FileID, id_max: usize, prime: &String) -> RuntimeInformation {
+    pub fn new(current_file: FileID, id_max: usize, prime: &String, json_writer: &mut Option<Box<dyn Write>>) -> RuntimeInformation {
         RuntimeInformation {
             current_file,
             block_type: BlockType::Known,
@@ -70,6 +71,7 @@ impl RuntimeInformation {
             anonymous_components: AnonymousComponentsInfo::new(),
             conditions_state: Vec::new(),
             unknown_counter: 0,
+            json_writer: json_writer.take(),
         }
     }
 }
@@ -140,9 +142,10 @@ pub fn constraint_execution(
     program_archive: &ProgramArchive,
     flags: FlagsExecution, 
     prime: &String,
+    json_writer: &mut Option<Box<dyn Write>>,
 ) -> Result<(ExecutedProgram, ReportCollection), ReportCollection> {    
     let main_file_id = program_archive.get_file_id_main();
-    let mut runtime_information = RuntimeInformation::new(*main_file_id, program_archive.id_max, prime);
+    let mut runtime_information = RuntimeInformation::new(*main_file_id, program_archive.id_max, prime, json_writer);
     use Expression::Call;
 
     runtime_information.public_inputs = program_archive.get_public_inputs_main_component().clone();
@@ -167,6 +170,7 @@ pub fn constraint_execution(
             unreachable!("The main expression should be a call."); 
         };
     
+    *json_writer = runtime_information.json_writer.take();
     
     match folded_value_result {
         Result::Err(_) => Result::Err(runtime_information.runtime_errors),
@@ -185,7 +189,7 @@ pub fn execute_constant_expression(
     prime: &String,
 ) -> Result<BigInt, ReportCollection> {
     let current_file = expression.get_meta().get_file_id();
-    let mut runtime_information = RuntimeInformation::new(current_file, program_archive.id_max, prime);
+    let mut runtime_information = RuntimeInformation::new(current_file, program_archive.id_max, prime, &mut None);
     runtime_information.environment = environment;
     let folded_value_result =
         execute_expression(expression, program_archive, &mut runtime_information, flags);
@@ -3261,7 +3265,7 @@ fn execute_template_call(
         let mut node_wrap = Option::Some(ExecutedTemplate::new(
             is_main,
             id.to_string(),
-            instantiation_name,
+            instantiation_name.clone(),
             args_to_values,
             tag_values,
             code,
@@ -3269,6 +3273,7 @@ fn execute_template_call(
             is_custom_gate,
             is_extern_c
         ));
+        println!("Executing template: {}", instantiation_name);
         let (ret, _) = execute_sequence_of_statements(
             template_body,
             program_archive,
@@ -3308,7 +3313,12 @@ fn execute_template_call(
             }
         }   
         
-
+        if let Some(ref mut writer) = runtime.json_writer {
+            if !runtime.exec_program.model.is_empty() {
+                writeln!(writer, ",").unwrap();
+            }
+            new_node.export_json(writer, &runtime.exec_program.model, &runtime.exec_program.model_buses);
+        }
         let analysis = std::mem::replace(&mut runtime.analysis, analysis);
         let node_pointer = runtime.exec_program.add_node_to_scheme(new_node, analysis);
         node_pointer
