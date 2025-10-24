@@ -5,7 +5,7 @@ pub struct Input {
     pub out_r1cs: PathBuf,
     pub out_json_constraints: PathBuf,
     pub out_json_substitutions: PathBuf,
-    pub out_json_instructions: PathBuf,
+    pub out_instr_folder: PathBuf,
     pub out_wat_code: PathBuf,
     pub out_wasm_code: PathBuf,
     pub out_wasm_name: String,
@@ -49,6 +49,7 @@ const JS: &'static str = "js";
 const DAT: &'static str = "dat";
 const SYM: &'static str = "sym";
 const JSON: &'static str = "json";
+const INSTR: &'static str = "instructions";
 
 
 impl Input {
@@ -66,6 +67,7 @@ impl Input {
             println!("{}", Colour::Yellow.paint(format!("The name {} is reserved in Circom when using de --c flag. The files generated for your circuit will use the name {}_c instead of {}.", file_name, file_name, file_name)));
             file_name = format!("{}_c", file_name)
         };
+        let out_instr_path = Input::build_folder(&output_path, &file_name, INSTR);
         let output_c_path = Input::build_folder(&output_path, &file_name, CPP);
         let output_js_path = Input::build_folder(&output_path, &file_name, JS);
         let o_style = input_processing::get_simplification_style(&matches)?;
@@ -78,6 +80,7 @@ impl Input {
             out_wasm_code: Input::build_output(&output_js_path, &file_name, WASM),
 	        out_js_folder: output_js_path.clone(),
 	        out_wasm_name: file_name.clone(),
+            out_instr_folder: out_instr_path.clone(),
 	        out_c_folder: output_c_path.clone(),
 	        out_c_run_name: file_name.clone(),
             out_c_code: Input::build_output(&output_c_path, &file_name, CPP),
@@ -92,11 +95,6 @@ impl Input {
                 &output_path,
                 &format!("{}_substitutions", file_name),
                 JSON,
-            ),
-            out_json_instructions: Input::build_output(
-                &output_path,
-                &format!("{}_instructions", file_name),
-                JSON
             ),
             wat_flag:input_processing::get_wat(&matches),
             wasm_flag: input_processing::get_wasm(&matches),
@@ -162,6 +160,10 @@ impl Input {
         self.out_wasm_name.clone()
     }
 
+    pub fn instr_folder(&self) -> &str {
+        self.out_instr_folder.to_str().unwrap()
+    }
+
     pub fn c_folder(&self) -> &str {
         self.out_c_folder.to_str().unwrap()
     }
@@ -207,9 +209,6 @@ impl Input {
     }
     pub fn json_instr_flag(&self) -> bool {
         self.json_instruction_flag
-    }
-    pub fn json_instructions_file(&self) -> &str {
-        self.out_json_instructions.to_str().unwrap()
     }
     pub fn main_inputs_flag(&self) -> bool {
         self.main_inputs_flag

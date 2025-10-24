@@ -3,7 +3,6 @@ use super::type_definitions::*;
 use super::ExecutedBus;
 use circom_algebra::algebra::ArithmeticExpression;
 use compiler::hir::very_concrete_program::*;
-use dag::InstrStatement;
 use dag::DAG;
 use num_bigint::BigInt;
 use program_structure::ast::{SignalType, Statement};
@@ -73,8 +72,7 @@ pub struct ExecutedTemplate {
     pub intermediates: WireCollector,
     pub ordered_signals: WireCollector,
     pub constraints: Vec<Constraint>,
-    pub instructions: Vec<InstrStatement>,
-    pub instruction_components: BTreeMap<String, usize>,
+    pub subcomponent_declarations: BTreeMap<String, usize>,
     pub components: ComponentCollector,
     pub number_of_components: usize,
     pub public_inputs: HashSet<String>,
@@ -89,7 +87,9 @@ pub struct ExecutedTemplate {
     pub underscored_signals: Vec<String>,
     connexions: Vec<Connexion>,
     pub bus_connexions: HashMap<String, BusConnexion>,
-    pub is_extern_c: bool
+    pub is_extern_c: bool,
+    json_writer: Option<Box<dyn Write>>,
+    json_first_statement: bool,
 }
 
 impl ExecutedTemplate {
@@ -102,7 +102,8 @@ impl ExecutedTemplate {
         code: Statement,
         is_parallel: bool,
         is_custom_gate: bool,
-        is_extern_c: bool
+        is_extern_c: bool,
+        json_writer: &mut Option<Box<dyn Write>>,
     ) -> ExecutedTemplate {
         let public_inputs: HashSet<_> = public.iter().cloned().collect();
 
@@ -123,14 +124,15 @@ impl ExecutedTemplate {
             intermediates: WireCollector::new(),
             ordered_signals: WireCollector::new(),
             constraints: Vec::new(),
-            instructions: Vec::new(),
             components: ComponentCollector::new(),
-            instruction_components: BTreeMap::new(),
+            subcomponent_declarations: BTreeMap::new(),
             number_of_components: 0,
             connexions: Vec::new(),
             bus_connexions: HashMap::new(),
             underscored_signals: Vec::new(),
-            is_extern_c
+            is_extern_c,
+            json_writer: std::mem::take(json_writer),
+            json_first_statement: true,
         }
     }
 
@@ -222,20 +224,41 @@ impl ExecutedTemplate {
         self.constraints.push(constraint);
     }
 
-    pub fn add_instr_assign(&mut self, symbol: &ArithmeticExpression<String>, value: &ArithmeticExpression<String>) {
-        self.instructions.push(InstrStatement::Assign { symbol: symbol.clone(), expr: value.clone() });
+    pub fn add_instr_assign(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
+        if let Some(writer) = &mut self.json_writer {
+            if self.json_first_statement {
+                self.json_first_statement = false;
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer, "{{\"$\":\"A\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.to_json()).unwrap();
+        }
     }
 
-    pub fn add_instr_hint(&mut self, symbol: &ArithmeticExpression<String>, value: &ArithmeticExpression<String>) {
-        self.instructions.push(InstrStatement::Hint { symbol: symbol.clone(), expr: value.clone() });
+    pub fn add_instr_hint(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
+        if let Some(writer) = &mut self.json_writer {
+            if self.json_first_statement {
+                self.json_first_statement = false;
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer, "{{\"$\":\"H\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.to_json()).unwrap();
+        }
     }
 
     pub fn add_instr_constraint(&mut self, left: &ArithmeticExpression<String>, right: &ArithmeticExpression<String>) {
-        self.instructions.push(InstrStatement::Constraint { left: left.clone(), right: right.clone() });
+        if let Some(writer) = &mut self.json_writer {
+            if self.json_first_statement {
+                self.json_first_statement = false;
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer, "{{\"$\":\"C\",\"l\":{},\"r\":{}}}", left.to_json(), right.to_json()).unwrap();
+        }
     }
 
     pub fn add_instr_component(&mut self, symbol: &String, node_pointer: usize) {
-        self.instruction_components.insert(symbol.clone(), node_pointer);
+        self.subcomponent_declarations.insert(symbol.clone(), node_pointer);
     }
 
     pub fn add_underscored_signal(&mut self, signal: &str) {
@@ -266,80 +289,78 @@ impl ExecutedTemplate {
         &self.intermediates
     }
 
-    pub fn export_json(&mut self, writer: &mut dyn Write, templates_info: &Vec<ExecutedTemplate>, buses_info : &Vec<ExecutedBus>) {
-        writeln!(writer, "\"{}\":{{", self.report_name).unwrap();
-        writeln!(writer, "\"template\":\"{}\",", self.template_name).unwrap();
+    pub fn export_json_before(&mut self) {
+        if let Some(writer) = &mut self.json_writer {
+            writeln!(writer, "{{").unwrap();
+            writeln!(writer, "\"template\":\"{}\",", self.template_name).unwrap();
 
-        write!(writer, "\"parameters\":[").unwrap();
-        {
-            let mut first = true;
-            for (_, data) in self.parameter_instances.clone() {
-                let (_, values) = data.destruct();
-                for value in as_big_int(values) {
-                    if !first {
-                        write!(writer, ",").unwrap();
+            write!(writer, "\"parameters\":[").unwrap();
+            {
+                let mut first = true;
+                for (_, data) in self.parameter_instances.clone() {
+                    let (_, values) = data.destruct();
+                    for value in as_big_int(values) {
+                        if !first {
+                            write!(writer, ",").unwrap();
+                        }
+                        write!(writer, "{}", value).unwrap();
+                        first = false;
                     }
-                    write!(writer, "{}", value).unwrap();
-                    first = false;
                 }
+                writeln!(writer, "],").unwrap();
             }
-            writeln!(writer, "],").unwrap();
-        }
 
-        writeln!(writer, "\"is_parallel\" : {},", self.is_parallel).unwrap();
+            writeln!(writer, "\"is_parallel\" : {},", self.is_parallel).unwrap();
+            writeln!(writer, "\"instructions\":[").unwrap();
+            writer.flush().unwrap();
+        }
+    }
+
+    pub fn export_json_after(&mut self, templates_info: &Vec<ExecutedTemplate>, buses_info : &Vec<ExecutedBus>) {
 
         let mut signals = BTreeMap::new();
         self.insert_wires(&mut signals, buses_info);
 
-        writeln!(writer, "\"signals\":{{").unwrap();
-        {
-            let mut first = true;
-            for (name, xtype) in &signals {
-                if !first {
-                    writeln!(writer, ",").unwrap();
-                }
-                write!(writer, "\"{}\":\"{}\"", name, xtype).unwrap();
-                first = false;
-            }
+        if let Some(writer) = &mut self.json_writer {
             writeln!(writer).unwrap();
-            writeln!(writer, "}},").unwrap();
-        }
-        std::mem::drop(signals);
+            writeln!(writer, "],").unwrap();
 
-        write!(writer, "\"subcomponents\":{{").unwrap();
-        if self.instruction_components.is_empty() {
-            writeln!(writer, "}},").unwrap();
-        } else {
-            let mut first = true;
-            for (name, node_pointer) in &self.instruction_components {
-                if !first {
-                    writeln!(writer, ",").unwrap();
+            writeln!(writer, "\"signals\":{{").unwrap();
+            {
+                let mut first = true;
+                for (name, xtype) in &signals {
+                    if !first {
+                        writeln!(writer, ",").unwrap();
+                    }
+                    write!(writer, "\"{}\":\"{}\"", name, xtype).unwrap();
+                    first = false;
                 }
-                write!(writer, "\"{}\":\"{}\"", name, templates_info[*node_pointer].report_name).unwrap();
-                first = false;
+                writeln!(writer).unwrap();
+                writeln!(writer, "}},").unwrap();
             }
-            writeln!(writer).unwrap();
-            writeln!(writer, "}},").unwrap();
-        }
-        self.instruction_components = BTreeMap::new(); // free memory
+            std::mem::drop(signals);
 
-        writeln!(writer, "\"instructions\":[").unwrap();
-        {
-            let mut first = true;
-            for instr in &self.instructions {
-                if !first {
-                    writeln!(writer, ",").unwrap();
+            write!(writer, "\"subcomponents\":{{").unwrap();
+            if self.subcomponent_declarations.is_empty() {
+                writeln!(writer, "}}").unwrap();
+            } else {
+                writeln!(writer).unwrap();
+                let mut first = true;
+                for (name, node_pointer) in &self.subcomponent_declarations {
+                    if !first {
+                        writeln!(writer, ",").unwrap();
+                    }
+                    write!(writer, "\"{}\":\"{}\"", name, templates_info[*node_pointer].report_name).unwrap();
+                    first = false;
                 }
-                write!(writer, "{}", instr.to_json()).unwrap();
-                first = false;
+                writeln!(writer).unwrap();
+                writeln!(writer, "}}").unwrap();
             }
-            writeln!(writer).unwrap();
-            writeln!(writer, "]").unwrap();
-        }
-        self.instruction_components = BTreeMap::new(); // free memory
+            self.subcomponent_declarations = BTreeMap::new(); // free memory
 
-        write!(writer, "}}").unwrap();
-        writer.flush().unwrap();
+            writeln!(writer, "}}").unwrap();
+            self.json_writer = None;
+        }
     }
 
     pub fn insert_in_dag(&mut self, dag: &mut DAG, buses_info : &Vec<ExecutedBus>) {

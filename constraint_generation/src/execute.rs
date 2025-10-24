@@ -30,7 +30,7 @@ use super::{
     ast::*, ArithmeticError, FileID, ProgramArchive, Report, ReportCode, ReportCollection
 };
 use circom_algebra::num_bigint::BigInt;
-use std::{collections::{BTreeMap, HashMap}, io::Write};
+use std::{collections::{BTreeMap, HashMap}, io::Write, path::PathBuf};
 use crate::FlagsExecution;
 type AExpr = ArithmeticExpressionGen<String>;
 type AnonymousComponentsInfo = BTreeMap<String, (Meta, Vec<Expression>)>;
@@ -54,10 +54,10 @@ struct RuntimeInformation {
     pub environment: ExecutionEnvironment,
     pub exec_program: ExecutedProgram,
     pub anonymous_components: AnonymousComponentsInfo,
-    pub json_writer: Option<Box<dyn Write>>,
+    pub json_instructions_folder: Option<String>,
 }
 impl RuntimeInformation {
-    pub fn new(current_file: FileID, id_max: usize, prime: &String, json_writer: &mut Option<Box<dyn Write>>) -> RuntimeInformation {
+    pub fn new(current_file: FileID, id_max: usize, prime: &String, folder: &Option<String>) -> RuntimeInformation {
         RuntimeInformation {
             current_file,
             block_type: BlockType::Known,
@@ -71,7 +71,7 @@ impl RuntimeInformation {
             anonymous_components: AnonymousComponentsInfo::new(),
             conditions_state: Vec::new(),
             unknown_counter: 0,
-            json_writer: json_writer.take(),
+            json_instructions_folder: folder.clone(),
         }
     }
 }
@@ -142,10 +142,10 @@ pub fn constraint_execution(
     program_archive: &ProgramArchive,
     flags: FlagsExecution, 
     prime: &String,
-    json_writer: &mut Option<Box<dyn Write>>,
+    folder: &Option<String>
 ) -> Result<(ExecutedProgram, ReportCollection), ReportCollection> {    
     let main_file_id = program_archive.get_file_id_main();
-    let mut runtime_information = RuntimeInformation::new(*main_file_id, program_archive.id_max, prime, json_writer);
+    let mut runtime_information = RuntimeInformation::new(*main_file_id, program_archive.id_max, prime, folder);
     use Expression::Call;
 
     runtime_information.public_inputs = program_archive.get_public_inputs_main_component().clone();
@@ -170,8 +170,6 @@ pub fn constraint_execution(
             unreachable!("The main expression should be a call."); 
         };
     
-    *json_writer = runtime_information.json_writer.take();
-    
     match folded_value_result {
         Result::Err(_) => Result::Err(runtime_information.runtime_errors),
         Result::Ok(folded_value) => {
@@ -189,7 +187,7 @@ pub fn execute_constant_expression(
     prime: &String,
 ) -> Result<BigInt, ReportCollection> {
     let current_file = expression.get_meta().get_file_id();
-    let mut runtime_information = RuntimeInformation::new(current_file, program_archive.id_max, prime, &mut None);
+    let mut runtime_information = RuntimeInformation::new(current_file, program_archive.id_max, prime, &None);
     runtime_information.environment = environment;
     let folded_value_result =
         execute_expression(expression, program_archive, &mut runtime_information, flags);
@@ -3262,18 +3260,33 @@ fn execute_template_call(
         let analysis =
             std::mem::replace(&mut runtime.analysis, Analysis::new(program_archive.id_max));
         let code = program_archive.get_template_data(id).get_body().clone();
-        let mut node_wrap = Option::Some(ExecutedTemplate::new(
+
+        println!("Executing template: {}", instantiation_name.clone());
+
+        let mut json_writer = if let Some(folder) = &runtime.json_instructions_folder {
+            let mut path = PathBuf::from(folder);
+            path.push(format!("{}.{:08x}.json", id, crc32fast::hash(instantiation_name.as_bytes())));
+            let file = std::fs::File::create(path).expect("Unable to create JSON file for template execution trace.");
+            let writer = std::io::BufWriter::new(file);
+            Some(Box::new(writer) as Box<dyn std::io::Write>)
+        } else {
+            None
+        };
+        let mut node = ExecutedTemplate::new(
             is_main,
             id.to_string(),
-            instantiation_name.clone(),
+            instantiation_name,
             args_to_values,
             tag_values,
             code,
             is_parallel,
             is_custom_gate,
-            is_extern_c
-        ));
-        println!("Executing template: {}", instantiation_name);
+            is_extern_c,
+            &mut json_writer,
+        );
+
+        node.export_json_before();
+        let mut node_wrap = Option::Some(node);
         let (ret, _) = execute_sequence_of_statements(
             template_body,
             program_archive,
@@ -3297,6 +3310,7 @@ fn execute_template_call(
             Ok(_) => {},
         }
         let mut new_node = node_wrap.unwrap();
+        new_node.export_json_after(&runtime.exec_program.model, &runtime.exec_program.model_buses);
 
 
         // we add the tags to the executed template
@@ -3312,13 +3326,7 @@ fn execute_template_call(
                 new_node.add_tag_signal(name, value);
             }
         }   
-        
-        if let Some(ref mut writer) = runtime.json_writer {
-            if !runtime.exec_program.model.is_empty() {
-                writeln!(writer, ",").unwrap();
-            }
-            new_node.export_json(writer, &runtime.exec_program.model, &runtime.exec_program.model_buses);
-        }
+
         let analysis = std::mem::replace(&mut runtime.analysis, analysis);
         let node_pointer = runtime.exec_program.add_node_to_scheme(new_node, analysis);
         node_pointer

@@ -30,7 +30,7 @@ pub struct BuildConfig {
     pub flag_json_sub: bool,
     pub json_substitutions: String,
     pub flag_json_instr: bool,
-    pub json_instructions: String,
+    pub json_instructions_folder: String,
     pub flag_s: bool,
     pub flag_f: bool,
     pub flag_p: bool,
@@ -55,39 +55,20 @@ pub fn build_circuit(program: ProgramArchive, config: BuildConfig) -> BuildRespo
         inspect: config.inspect_constraints,
     };
 
-    let mut json_writer = if config.flag_json_instr {
-        let file = File::create(&config.json_instructions).expect("Unable to create JSON instruction file");
-        let buffered = BufWriter::new(file);
-        Some(Box::new(buffered) as Box<dyn std::io::Write>)
+    let folder = if config.flag_json_instr {
+        let path = std::path::Path::new(&config.json_instructions_folder);
+        if !path.exists() {
+            std::fs::create_dir_all(path).expect("Could not create json instructions folder");
+        }
+        Some(config.json_instructions_folder.clone())
     } else {
         None
     };
 
-    if let Some(ref mut writer) = json_writer {
-        writeln!(writer, "{{").unwrap();
-        writeln!(writer, "\"template_instances\":{{").unwrap();
-    }
-
-    let (exe, warnings) = instantiation(&program, flags, &config.prime, &mut json_writer).map_err(|r| {
+    let (exe, warnings) = instantiation(&program, flags, &config.prime, &folder).map_err(|r| {
         Report::print_reports(&r, &files);
     })?;
 
-    if let Some(ref mut writer) = json_writer {
-        writeln!(writer).unwrap();
-        writeln!(writer, "}},").unwrap();
-
-        if let Some(template) = exe.model.last() {
-            writeln!(writer, "\"main\":\"{}\",", template.report_name).unwrap();
-        } else {
-            writeln!(writer, "\"main\":null,").unwrap();
-        }
-
-        writeln!(writer, "\"prime\":\"{}\"", UsefulConstants::new(&config.prime).get_p()).unwrap();
-
-        writeln!(writer, "}}").unwrap();
-
-        writer.flush().unwrap();
-    }
     Report::print_reports(&warnings, &files);
     let (mut dag, mut vcp, warnings) = export(exe, program, flags).map_err(|r| {
         Report::print_reports(&r, &files);
@@ -116,8 +97,8 @@ pub fn build_circuit(program: ProgramArchive, config: BuildConfig) -> BuildRespo
 }
 
 type InstantiationResponse = Result<(ExecutedProgram, ReportCollection), ReportCollection>;
-fn instantiation(program: &ProgramArchive, flags: FlagsExecution, prime: &String, json_writer: &mut Option<Box<dyn Write>>) -> InstantiationResponse {
-    let execution_result = execute::constraint_execution(&program, flags, prime, json_writer);
+fn instantiation(program: &ProgramArchive, flags: FlagsExecution, prime: &String, folder: &Option<String>) -> InstantiationResponse {
+    let execution_result = execute::constraint_execution(&program, flags, prime, folder);
     match execution_result {
         Ok((program_exe, warnings)) => {
             let no_nodes = program_exe.number_of_nodes();

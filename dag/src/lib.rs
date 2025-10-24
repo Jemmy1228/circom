@@ -21,45 +21,6 @@ type Range = std::ops::Range<usize>;
 
 pub type FastSubAccess = HashMap<usize, Substitution>;
 
-use circom_algebra::algebra::ArithmeticExpression;
-pub enum InstrStatement {
-    Assign { symbol: ArithmeticExpression<String>, expr: ArithmeticExpression<String> },
-    Hint { symbol: ArithmeticExpression<String>, expr: ArithmeticExpression<String> },
-    Constraint { left: ArithmeticExpression<String>, right: ArithmeticExpression<String> },
-}
-
-impl std::fmt::Display for InstrStatement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InstrStatement::Assign { symbol, expr } => {
-                write!(f, "{} <== {};", symbol, expr)
-            },
-            InstrStatement::Hint { symbol, expr } => {
-                write!(f, "{} <-- {};", symbol, expr)
-            },
-            InstrStatement::Constraint { left, right } => {
-                write!(f, "{} === {};", left, right)
-            }
-        }
-    }
-}
-
-impl InstrStatement {
-    pub fn to_json(&self) -> String {
-        match self {
-            InstrStatement::Assign { symbol, expr } => {
-                format!("{{\"$\":\"A\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.to_json())
-            }
-            InstrStatement::Hint { symbol, expr } => {
-                format!("{{\"$\":\"H\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.to_json())
-            }
-            InstrStatement::Constraint { left, right } => {
-                format!("{{\"$\":\"C\",\"l\":{},\"r\":{}}}", left.to_json(), right.to_json())
-            }
-        }
-    }
-}
-
 pub struct Tree<'a> {
     dag: &'a DAG,
     pub field: BigInt,
