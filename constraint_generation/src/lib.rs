@@ -44,6 +44,7 @@ pub struct BuildConfig {
 pub struct FlagsExecution{
     pub verbose: bool,
     pub inspect: bool,
+    pub hint: bool,
 }
 
 pub type ConstraintWriter = Box<dyn ConstraintExporter>;
@@ -53,6 +54,7 @@ pub fn build_circuit(program: ProgramArchive, config: BuildConfig) -> BuildRespo
     let flags = FlagsExecution{
         verbose: config.flag_verbose,
         inspect: config.inspect_constraints,
+        hint: false,
     };
 
     let folder = if config.flag_json_instr {

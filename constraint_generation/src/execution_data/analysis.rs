@@ -20,7 +20,7 @@ impl Analysis {
     }
 
     pub fn computed(analysis: &mut Analysis, id: usize, value: AExpr) {
-        if let AExpr::Number { value } = value {
+        if let AExpr::Number { value, .. } = value {
             let new = ValuePOS::Val(value);
             let old = analysis.computed_values[id].clone();
             analysis.computed_values[id] = ValuePOS::least_upper_bound(&old, &new);

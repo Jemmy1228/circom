@@ -5,6 +5,7 @@ use circom_algebra::num_bigint::BigInt;
 use constraint_writers::json_writer::SubstitutionJSON;
 use std::collections::{HashMap, HashSet, LinkedList, BTreeSet};
 use std::sync::Arc;
+use circom_algebra::algebra::HintExpression::Unknown;
 
 fn log_substitutions(substitutions: &LinkedList<S>, writer: &mut Option<SubstitutionJSON>) {
     use super::json_porting::port_substitution;
@@ -140,16 +141,16 @@ fn eq_cluster_simplification(
         } else if HashSet::contains(forbidden, &s_0) {
             LinkedList::push_back(
                 &mut substitutions,
-                S::new(s_1, A::Signal { symbol: s_0 }).unwrap(),
+                S::new(s_1, A::Signal { symbol: s_0, expr: Unknown }).unwrap(),
             );
         } else if HashSet::contains(forbidden, &s_1) {
             LinkedList::push_back(
                 &mut substitutions,
-                S::new(s_0, A::Signal { symbol: s_1 }).unwrap(),
+                S::new(s_0, A::Signal { symbol: s_1, expr: Unknown }).unwrap(),
             );
         } else {
             let (l, r) = if s_0 > s_1 { (s_0, s_1) } else { (s_1, s_0) };
-            LinkedList::push_back(&mut substitutions, S::new(l, A::Signal { symbol: r }).unwrap());
+            LinkedList::push_back(&mut substitutions, S::new(l, A::Signal { symbol: r, expr: Unknown }).unwrap());
         }
         (substitutions, constraints)
     } else {
@@ -179,15 +180,15 @@ fn eq_cluster_simplification(
         };
 
         for signal in remains {
-            let l = A::Signal { symbol: signal };
-            let r = A::Signal { symbol: rh_signal };
+            let l = A::Signal { symbol: signal, expr: Unknown };
+            let r = A::Signal { symbol: rh_signal, expr: Unknown };
             let expr = A::sub(&l, &r, field);
             let c = A::transform_expression_to_constraint_form(expr, field).unwrap();
             LinkedList::push_back(&mut cons, c);
         }
 
         for signal in remove {
-            let sub = S::new(signal, A::Signal { symbol: rh_signal }).unwrap();
+            let sub = S::new(signal, A::Signal { symbol: rh_signal, expr: Unknown }).unwrap();
             LinkedList::push_back(&mut subs, sub);
         }
 
@@ -403,7 +404,7 @@ fn build_relevant_set(
 ) {
     fn unwrapped_signal(map: &SEncoded, signal: usize) -> Option<usize> {
         let f = |e: &A| {
-            if let A::Signal { symbol } = e {
+            if let A::Signal { symbol, .. } = e {
                 Some(*symbol)
             } else {
                 None

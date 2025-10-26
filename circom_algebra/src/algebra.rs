@@ -1,93 +1,120 @@
 use super::modular_arithmetic;
 pub use super::modular_arithmetic::ArithmeticError;
 use num_bigint::BigInt;
-use num_traits::{ToPrimitive, Zero};
+use num_traits::{Num, ToPrimitive, Zero};
+use program_structure::ast::{ExpressionInfixOpcode, ExpressionPrefixOpcode};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 
-pub enum NonQuadraticExpression<C>
-where
-    C: Hash + Eq,
-{
-    Unknown,
-    PrefixOp {
-        op: String,
-        elem: Box<ArithmeticExpression<C>>,
-    },
-    InfixOp {
-        op: String,
-        left: Box<ArithmeticExpression<C>>,
-        right: Box<ArithmeticExpression<C>>,
-    },
-    InlineSwitch {
-        condition: Box<ArithmeticExpression<C>>,
-        true_case: Box<ArithmeticExpression<C>>,
-        false_case: Box<ArithmeticExpression<C>>,
-    }
+type HExpr = HintExpression;
+
+#[derive(Clone, Debug)]
+pub enum HintAccess {
+    ComponentAccess(String),
+    ArrayAccess(HintExpression),
 }
 
-impl<C: Default + Clone + Display + Hash + Eq + Ord> Display for NonQuadraticExpression<C> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        use NonQuadraticExpression::*;
-        let msg = match self {
-            Unknown => "Unknown".to_string(),
-            PrefixOp { op, elem } => {
-                format!("{}({})", op, elem)
-            }
-            InfixOp { op, left, right } => {
-                format!("({}) {} ({})", left, op, right)
-            }
-            InlineSwitch { condition, true_case, false_case } => {
-                format!("({}) ? ({}) : ({})", condition, true_case, false_case)
-            }
-        };
-        f.write_str(msg.as_str())
-    }
-}
-
-impl<C: Default + Clone + Display + Hash + Eq + Ord> Clone for NonQuadraticExpression<C> {
-    fn clone(&self) -> Self {
-        use NonQuadraticExpression::*;
+impl HintAccess {
+    pub fn to_json(&self) -> String {
+        use HintAccess::*;
         match self {
-            Unknown => Unknown,
-            PrefixOp { op, elem } => PrefixOp { op: op.clone(),  elem: elem.clone() },
-            InfixOp { op, left, right } => InfixOp { op: op.clone(), left: left.clone(), right: right.clone() },
-            InlineSwitch { condition, true_case, false_case } => InlineSwitch {
-                condition: condition.clone(),
-                true_case: true_case.clone(),
-                false_case: false_case.clone()
-            },
+            ComponentAccess(name) => {
+                format!("{{\"$\": \"Access\", \"@\": \"ComponentAccess\", \"name\": \"{}\"}}", name)
+            }
+            ArrayAccess(index) => {
+                format!("{{\"$\": \"Access\", \"@\": \"ArrayAccess\", \"index\": {}}}", index.to_json())
+            }
         }
     }
 }
 
-impl<C: Default + Clone + Display + Hash + Eq + Ord> NonQuadraticExpression<C> {
-    fn to_json(&self) -> String {
-        use NonQuadraticExpression::*;
+#[derive(Clone, Debug)]
+pub enum HintExpression {
+    Unknown,
+    Number { value: BigInt },
+    Symbol {
+        symbol: String,
+        access: Vec<HintAccess>,
+    },
+    Variable { symbol: String },
+    InfixOp {
+        lhe: Box<HintExpression>,
+        rhe: Box<HintExpression>,
+        infix_op: ExpressionInfixOpcode,
+    },
+    PrefixOp {
+        rhe: Box<HintExpression>,
+        prefix_op: ExpressionPrefixOpcode,
+    },
+    MemorySlice {
+        route: Vec<usize>,
+        values: Vec<HintExpression>,
+    },
+    InlineSwitch {
+        condition: Box<HintExpression>,
+        if_true: Box<HintExpression>,
+        if_false: Box<HintExpression>,
+    },
+}
+
+impl HintExpression {
+    pub fn to_json(&self) -> String {
+        use HintExpression::*;
         match self {
-            Unknown => format!("{{\"@\":\"U\"}}"),
-            PrefixOp { op, elem } => {
-                format!(
-                    "{{\"@\":\"1{}\",\"v\":[{}]}}",
-                    op,
-                    elem.to_json()
+            Unknown => {
+                format!("{{\"$\": \"Expr\", \"@\": \"Unknown\"}}")
+            }
+            Number { value } => {
+                format!("{{\"$\": \"Expr\", \"@\": \"Number\", \"value\": \"{}\"}}", value.to_str_radix(10))
+            }
+            Symbol { symbol, access } => {
+                format!("{{\"$\": \"Expr\", \"@\": \"Symbol\", \"symbol\": \"{}\", \"access\": [{}]}}", symbol,
+                    access.iter()
+                    .map(|acc| acc.to_json())
+                    .collect::<Vec<String>>()
+                    .join(", ")
                 )
             }
-            InfixOp { op, left, right } => {
+            Variable { symbol } => {
+                format!("{{\"$\": \"Expr\", \"@\": \"Variable\", \"symbol\": \"{}\"}}", symbol)
+            }
+            InfixOp { lhe, rhe, infix_op } => {
                 format!(
-                    "{{\"@\":\"2{}\",\"v\":[{},{}]}}",
-                    op,
-                    left.to_json(),
-                    right.to_json()
+                    "{{\"$\": \"Expr\", \"@\": \"{:?}\", \"lhe\": {}, \"rhe\": {}}}",
+                    infix_op,
+                    lhe.to_json(),
+                    rhe.to_json(),
                 )
             }
-            InlineSwitch { condition, true_case, false_case } => {
+            PrefixOp { rhe, prefix_op } => {
                 format!(
-                    "{{\"@\":\"3?\",\"v\":[{},{},{}]}}",
+                    "{{\"$\": \"Expr\", \"@\": \"{:?}\", \"rhe\": {}}}",
+                    prefix_op,
+                    rhe.to_json(),
+                )
+            }
+            MemorySlice { route, values } => {
+                let route_json = route.iter()
+                    .map(|dim| dim.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                let values_json = values.iter()
+                    .map(|val| val.to_json())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!(
+                    "{{\"$\": \"Expr\", \"@\": \"MemorySlice\", \"route\": [{}], \"values\": [{}]}}",
+                    route_json,
+                    values_json
+                )
+            }
+            InlineSwitch { condition, if_true, if_false } => {
+                format!(
+                    "{{\"$\": \"Expr\", \"@\": \"InlineSwitch\", \"condition\": {}, \"if_true\": {}, \"if_false\": {}}}",
                     condition.to_json(),
-                    true_case.to_json(),
-                    false_case.to_json()
+                    if_true.to_json(),
+                    if_false.to_json(),
                 )
             }
         }
@@ -100,15 +127,18 @@ where
 {
     Number {
         value: BigInt,
+        expr: HintExpression,
     },
     Signal {
         symbol: C,
+        expr: HintExpression,
     },
     Linear {
         // Represents the expression: c1*s1 + .. + cn*sn + C
         // where c1..cn are integers modulo a prime and
         // s1..sn are signals. C is a constant value
         coefficients: HashMap<C, BigInt>,
+        expr: HintExpression,
     },
     Quadratic {
         // Is a quadratic expression of the form:
@@ -117,14 +147,13 @@ where
         a: HashMap<C, BigInt>,
         b: HashMap<C, BigInt>,
         c: HashMap<C, BigInt>,
+        expr: HintExpression,
     },
-    NonQuadratic {
-        expr: NonQuadraticExpression<C>,
-    },
+    NonQuadratic { expr: HintExpression }, // Represents an expression that is not quadratic
 }
 
 impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
-    pub fn to_json(&self) -> String {
+    fn to_constrain_json(&self) -> String {
         fn hashmap_to_json_entries<C: Default + Clone + Display + Hash + Eq + Ord>(
             coefficients: &HashMap<C, BigInt>,
         ) -> String {
@@ -150,28 +179,57 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         }
         use ArithmeticExpression::*;
         match self {
-            Number { value } => {
-                if value.is_zero() {
-                    "{\"@\":\"L\",\"c\":{}}".to_string()
-                } else {
-                    format!("{{\"@\":\"L\",\"c\":{{\"\":\"{}\"}}}}", value.to_str_radix(10))
-                }
+            Number { value, .. } => {
+                format!("{{\"$\": \"QuadExpr\", \"@\": \"Number\", \"value\": \"{}\"}}", value.to_str_radix(10))
             }
-            Signal { symbol } => {
-                format!("{{\"@\":\"L\",\"c\":{{\"{}\":\"1\"}}}}", symbol)
+            Signal { symbol, .. } => {
+                format!("{{\"$\": \"QuadExpr\", \"@\": \"Signal\", \"symbol\": \"{}\"}}", symbol)
             }
-            Linear { coefficients } => {
-                format!("{{\"@\":\"L\",\"c\":{{{}}}}}", hashmap_to_json_entries(coefficients))
-            }
-            Quadratic { a, b, c } => {
+            Linear { coefficients , ..} => {
                 format!(
-                    "{{\"@\":\"Q\",\"a\":{{{}}},\"b\":{{{}}},\"c\":{{{}}}}}",
+                    "{{\"$\": \"QuadExpr\", \"@\": \"Linear\", \"coefficients\": {{{}}}}}",
+                    hashmap_to_json_entries(coefficients)
+                )
+            }
+            Quadratic { a, b, c , ..} => {
+                format!(
+                    "{{\"$\": \"QuadExpr\", \"@\": \"Quadratic\", \"a\": {{{}}}, \"b\": {{{}}}, \"c\": {{{}}}}}",
                     hashmap_to_json_entries(a),
                     hashmap_to_json_entries(b),
                     hashmap_to_json_entries(c)
                 )
             }
+            NonQuadratic { .. }  => unreachable!(),
+        }
+    }
+
+    fn to_expr_json(&self) -> String {
+        use ArithmeticExpression::*;
+        match self {
+            Number { expr, .. } => expr.to_json(),
+            Signal { expr, .. } => expr.to_json(),
+            Linear { expr, .. } => expr.to_json(),
+            Quadratic { expr, .. } => expr.to_json(),
             NonQuadratic { expr } => expr.to_json(),
+        }
+    }
+
+    pub fn to_json(&self, expr: bool) -> String {
+        if expr {
+            self.to_expr_json()
+        } else {
+            self.to_constrain_json()
+        }
+    }
+
+    pub fn to_hint_expr(&self) -> HintExpression {
+        use ArithmeticExpression::*;
+        match self {
+            Number { expr, .. } => expr.clone(),
+            Signal { expr, .. } => expr.clone(),
+            Linear { expr, .. } => expr.clone(),
+            Quadratic { expr, .. } => expr.clone(),
+            NonQuadratic { expr } => expr.clone(),
         }
     }
 }
@@ -179,19 +237,27 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
 impl<C: Default + Clone + Display + Hash + Eq + Ord> Display for ArithmeticExpression<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use ArithmeticExpression::*;
-        let msg = match self {
-            Number { value } => value.to_str_radix(10),
-            Signal { symbol } => format!("{}", symbol),
-            NonQuadratic{ expr } => format!("{}", expr),
-            Linear { coefficients } => ArithmeticExpression::string_from_coefficients(coefficients),
-            Quadratic { a, b, c } => {
-                let a_string = ArithmeticExpression::string_from_coefficients(a);
-                let b_string = ArithmeticExpression::string_from_coefficients(b);
-                let c_string = ArithmeticExpression::string_from_coefficients(c);
-                format!("({})*({}) + ({})", a_string, b_string, c_string)
+        match self {
+            Number { value, .. } => {
+                write!(f, "{}", value.to_str_radix(10))
             }
-        };
-        f.write_str(msg.as_str())
+            Signal { symbol, .. } => {
+                write!(f, "{}", symbol)
+            }
+            Linear { coefficients , ..} => {
+                let string_coefficients = ArithmeticExpression::string_from_coefficients(coefficients);
+                write!(f, "{}", string_coefficients)
+            }
+            Quadratic { a, b, c , ..} => {
+                let string_a = ArithmeticExpression::string_from_coefficients(a);
+                let string_b = ArithmeticExpression::string_from_coefficients(b);
+                let string_c = ArithmeticExpression::string_from_coefficients(c);
+                write!(f, "({})*({}) + ({})", string_a, string_b, string_c)
+            }
+            NonQuadratic { .. }  => {
+                write!(f, "NQ")
+            }
+        }
     }
 }
 
@@ -199,11 +265,11 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Clone for ArithmeticExpress
     fn clone(&self) -> Self {
         use ArithmeticExpression::*;
         match self {
-            Number { value } => Number { value: value.clone() },
-            Signal { symbol } => Signal { symbol: symbol.clone() },
-            Linear { coefficients } => Linear { coefficients: coefficients.clone() },
-            Quadratic { a, b, c } => Quadratic { a: a.clone(), b: b.clone(), c: c.clone() },
-            NonQuadratic { expr } => NonQuadratic { expr: expr.clone() }
+            Number { value , expr} => Number { value: value.clone() , expr: expr.clone() },
+            Signal { symbol , expr} => Signal { symbol: symbol.clone() , expr: expr.clone() },
+            Linear { coefficients , expr} => Linear { coefficients: coefficients.clone() , expr: expr.clone() },
+            Quadratic { a, b, c , expr} => Quadratic { a: a.clone(), b: b.clone(), c: c.clone() , expr: expr.clone() },
+            NonQuadratic { expr } => NonQuadratic { expr: expr.clone() },
         }
     }
 }
@@ -213,10 +279,10 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> PartialEq for ArithmeticExp
     fn eq(&self, other: &Self) -> bool {
         use ArithmeticExpression::*;
         match (self, other) {
-            (Number { value: v_0 }, Number { value: v_1 }) => *v_0 == *v_1,
-            (Signal { symbol: s_0 }, Signal { symbol: s_1 }) => *s_0 == *s_1,
-            (Linear { coefficients: c_0 }, Linear { coefficients: c_1 }) => *c_0 == *c_1,
-            (Quadratic { a: a_0, b: b_0, c: c_0 }, Quadratic { a: a_1, b: b_1, c: c_1 }) => {
+            (Number { value: v_0, .. }, Number { value: v_1, .. }) => *v_0 == *v_1,
+            (Signal { symbol: s_0, .. }, Signal { symbol: s_1, .. }) => *s_0 == *s_1,
+            (Linear { coefficients: c_0, .. }, Linear { coefficients: c_1, .. }) => *c_0 == *c_1,
+            (Quadratic { a: a_0, b: b_0, c: c_0, ..  }, Quadratic { a: a_1, b: b_1, c: c_1, .. }) => {
                 *a_0 == *a_1 && *b_0 == *b_1 && *c_0 == *c_1
             }
             _ => false,
@@ -226,7 +292,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> PartialEq for ArithmeticExp
 
 impl<C: Default + Clone + Display + Hash + Eq + Ord> Default for ArithmeticExpression<C> {
     fn default() -> Self {
-        ArithmeticExpression::NonQuadratic{ expr: NonQuadraticExpression::Unknown }
+        ArithmeticExpression::NonQuadratic { expr: HExpr::Unknown }
     }
 }
 
@@ -291,18 +357,18 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             NonQuadratic { .. } => {
                 return Option::None;
             }
-            Quadratic { a: old_a, b: old_b, c: old_c } => {
+            Quadratic { a: old_a, b: old_b, c: old_c, .. } => {
                 a = old_a;
                 b = old_b;
                 c = old_c;
             }
-            Number { value } => {
+            Number { value, .. } => {
                 c.insert(ArithmeticExpression::constant_coefficient(), value);
             }
-            Signal { symbol } => {
+            Signal { symbol, .. } => {
                 c.insert(symbol, BigInt::from(1));
             }
-            Linear { coefficients } => {
+            Linear { coefficients, .. } => {
                 c = coefficients;
             }
         }
@@ -423,22 +489,59 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         Result::Ok(())
     }
 
-    fn nonquadratic_infix(left: &ArithmeticExpression<C>, right: &ArithmeticExpression<C>, operator: &str) -> ArithmeticExpression<C> {
-        ArithmeticExpression::NonQuadratic {
-            expr: NonQuadraticExpression::InfixOp {
-                op: operator.to_string(),
-                left: Box::new(left.clone()),
-                right: Box::new(right.clone()),
-            },
+    fn nonquadratic_prefix(
+        rhe: &ArithmeticExpression<C>,
+        prefix_op: &ExpressionPrefixOpcode,
+    ) -> ArithmeticExpression<C> {
+        use ArithmeticExpression::*;
+        match rhe {
+            NonQuadratic { expr: rhe_expr } | Quadratic { expr: rhe_expr, .. } | Linear { expr: rhe_expr, .. } | Signal { expr: rhe_expr, .. } | Number { expr: rhe_expr, .. } => {
+                NonQuadratic { expr: HExpr::PrefixOp {
+                    rhe: Box::new(rhe_expr.clone()),
+                    prefix_op: prefix_op.clone(),
+                } }
+            }
         }
     }
 
-    fn nonquadratic_prefix(operator: &str, elem: &ArithmeticExpression<C>) -> ArithmeticExpression<C> {
-        ArithmeticExpression::NonQuadratic {
-            expr: NonQuadraticExpression::PrefixOp {
-                op: operator.to_string(),
-                elem: Box::new(elem.clone()),
-            },
+    fn nonquadratic_infix(
+        left: &ArithmeticExpression<C>,
+        right: &ArithmeticExpression<C>,
+        infix_op: &ExpressionInfixOpcode,
+    ) -> ArithmeticExpression<C> {
+        use ArithmeticExpression::*;
+        match (left, right) {
+            (NonQuadratic { expr: lhe }, NonQuadratic { expr: rhe })
+            | (NonQuadratic { expr: lhe }, Quadratic { expr: rhe, .. })
+            | (NonQuadratic { expr: lhe }, Linear { expr: rhe, .. })
+            | (NonQuadratic { expr: lhe }, Signal { expr: rhe, .. })
+            | (NonQuadratic { expr: lhe }, Number { expr: rhe, .. })
+            | (Quadratic { expr: lhe, .. }, NonQuadratic { expr: rhe })
+            | (Quadratic { expr: lhe, .. }, Quadratic { expr: rhe, .. })
+            | (Quadratic { expr: lhe, .. }, Linear { expr: rhe, .. })
+            | (Quadratic { expr: lhe, .. }, Signal { expr: rhe, .. })
+            | (Quadratic { expr: lhe, .. }, Number { expr: rhe, .. })
+            | (Linear { expr: lhe, .. }, NonQuadratic { expr: rhe })
+            | (Linear { expr: lhe, .. }, Quadratic { expr: rhe, .. })
+            | (Linear { expr: lhe, .. }, Linear { expr: rhe, .. })
+            | (Linear { expr: lhe, .. }, Signal { expr: rhe, .. })
+            | (Linear { expr: lhe, .. }, Number { expr: rhe, .. })
+            | (Signal { expr: lhe, .. }, NonQuadratic { expr: rhe })
+            | (Signal { expr: lhe, .. }, Quadratic { expr: rhe, .. })
+            | (Signal { expr: lhe, .. }, Linear { expr: rhe, .. })
+            | (Signal { expr: lhe, .. }, Signal { expr: rhe, .. })
+            | (Signal { expr: lhe, .. }, Number { expr: rhe, .. })
+            | (Number { expr: lhe, .. }, NonQuadratic { expr: rhe })
+            | (Number { expr: lhe, .. }, Quadratic { expr: rhe, .. })
+            | (Number { expr: lhe, .. }, Linear { expr: rhe, .. })
+            | (Number { expr: lhe, .. }, Signal { expr: rhe, .. })
+            | (Number { expr: lhe, .. }, Number { expr: rhe, .. }) => {
+                NonQuadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: infix_op.clone(),
+                } }
+            }
         }
     }
 
@@ -450,12 +553,16 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
         match (left, right) {
             (NonQuadratic { .. }, _) | (_, NonQuadratic { .. }) | (Quadratic { .. }, Quadratic { .. }) => {
-                ArithmeticExpression::nonquadratic_infix(left, right, "+")
+                ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::Add)
             }
-            (Number { value: v_0 }, Number { value: v_1 }) => {
-                Number { value: modular_arithmetic::add(v_0, v_1, field) }
+            (Number { value: v_0, expr: lhe }, Number { value: v_1, expr: rhe }) => {
+                Number { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, value: modular_arithmetic::add(v_0, v_1, field) }
             }
-            (Number { value }, Signal { symbol }) | (Signal { symbol }, Number { value }) => {
+            (Number { value, expr: lhe }, Signal { symbol, expr: rhe }) | (Signal { symbol, expr: lhe }, Number { value, expr: rhe }) => {
                 let mut coefficients = HashMap::new();
                 ArithmeticExpression::initialize_hashmap_for_expression(&mut coefficients);
                 ArithmeticExpression::add_constant_to_coefficients(value, &mut coefficients, field);
@@ -465,29 +572,39 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     &mut coefficients,
                     field,
                 );
-                Linear { coefficients }
+                Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, coefficients }
             }
-            (Number { value }, Linear { coefficients })
-            | (Linear { coefficients }, Number { value }) => {
+            (Number { value, expr: lhe }, Linear { coefficients, expr: rhe }) | (Linear { coefficients, expr: lhe }, Number { value, expr: rhe }) => {
                 let mut n_coefficients = coefficients.clone();
                 ArithmeticExpression::add_constant_to_coefficients(
                     value,
                     &mut n_coefficients,
                     field,
                 );
-                Linear { coefficients: n_coefficients }
+                Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, coefficients: n_coefficients }
             }
-            (Number { value }, Quadratic { a, b, c })
-            | (Quadratic { a, b, c }, Number { value }) => {
+            (Number { value, expr: lhe }, Quadratic { a, b, c, expr: rhe }) | (Quadratic { a, b, c, expr: lhe }, Number { value, expr: rhe }) => {
                 let mut n_c = c.clone();
                 ArithmeticExpression::add_constant_to_coefficients(value, &mut n_c, field);
-                Quadratic { a: a.clone(), b: b.clone(), c: n_c }
+                Quadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, a: a.clone(), b: b.clone(), c: n_c }
             }
-            (Signal { symbol: symbol_0 }, Signal { symbol: symbol_1 }) => {
+            (Signal { symbol, expr: lhe }, Signal { symbol: symbol_1, expr: rhe }) => {
                 let mut coefficients = HashMap::new();
                 ArithmeticExpression::initialize_hashmap_for_expression(&mut coefficients);
                 ArithmeticExpression::add_symbol_to_coefficients(
-                    symbol_0,
+                    symbol,
                     &BigInt::from(1),
                     &mut coefficients,
                     field,
@@ -498,10 +615,13 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     &mut coefficients,
                     field,
                 );
-                Linear { coefficients }
+                Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, coefficients }
             }
-            (Signal { symbol }, Linear { coefficients })
-            | (Linear { coefficients }, Signal { symbol }) => {
+            (Signal { symbol, expr: lhe }, Linear { coefficients, expr: rhe }) | (Linear { coefficients, expr: lhe }, Signal { symbol, expr: rhe }) => {
                 let mut n_coefficients = coefficients.clone();
                 ArithmeticExpression::add_symbol_to_coefficients(
                     symbol,
@@ -509,10 +629,13 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     &mut n_coefficients,
                     field,
                 );
-                Linear { coefficients: n_coefficients }
+                Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, coefficients: n_coefficients }
             }
-            (Signal { symbol }, Quadratic { a, b, c })
-            | (Quadratic { a, b, c }, Signal { symbol }) => {
+            (Signal { symbol, expr: lhe }, Quadratic { a, b, c, expr: rhe }) | (Quadratic { a, b, c, expr: lhe }, Signal { symbol, expr: rhe }) => {
                 let mut coefficients = c.clone();
                 ArithmeticExpression::add_symbol_to_coefficients(
                     symbol,
@@ -520,26 +643,37 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     &mut coefficients,
                     field,
                 );
-                Quadratic { a: a.clone(), b: b.clone(), c: coefficients }
+                Quadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, a: a.clone(), b: b.clone(), c: coefficients }
             }
-            (Linear { coefficients: coefficients_0 }, Linear { coefficients: coefficients_1 }) => {
+            (Linear { coefficients, expr: lhe }, Linear { coefficients: coefficients_1 , expr: rhe}) => {
                 let mut n_coefficients = coefficients_1.clone();
                 ArithmeticExpression::add_coefficients_to_coefficients(
-                    coefficients_0,
+                    coefficients,
                     &mut n_coefficients,
                     field,
                 );
-                Linear { coefficients: n_coefficients }
+                Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, coefficients: n_coefficients }
             }
-            (Linear { coefficients }, Quadratic { a, b, c })
-            | (Quadratic { a, b, c }, Linear { coefficients }) => {
+            (Linear { coefficients, expr: lhe }, Quadratic { a, b, c, expr: rhe }) | (Quadratic { a, b, c, expr: lhe }, Linear { coefficients, expr: rhe }) => {
                 let mut coefficients_1 = c.clone();
                 ArithmeticExpression::add_coefficients_to_coefficients(
                     coefficients,
                     &mut coefficients_1,
                     field,
                 );
-                Quadratic { a: a.clone(), b: b.clone(), c: coefficients_1 }
+                Quadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Add,
+                }, a: a.clone(), b: b.clone(), c: coefficients_1 }
             }
         }
     }
@@ -558,12 +692,16 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
             | (Linear { .. }, Quadratic { .. })
             | (Quadratic { .. }, Signal { .. })
             | (Signal { .. }, Quadratic { .. }) => {
-                ArithmeticExpression::nonquadratic_infix(left, right, "*")
+                ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::Mul)
             }
-            (Number { value: value_0 }, Number { value: value_1 }) => {
-                Number { value: modular_arithmetic::mul(value_0, value_1, field) }
+            (Number { value: value_0, expr: lhe }, Number { value: value_1, expr: rhe }) => {
+                Number { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Mul,
+                }, value: modular_arithmetic::mul(value_0, value_1, field) }
             }
-            (Number { value }, Signal { symbol }) | (Signal { symbol }, Number { value }) => {
+            (Number { value, expr: lhe }, Signal { symbol, expr: rhe }) | (Signal { symbol, expr: lhe }, Number { value, expr: rhe }) => {
                 let mut coefficients = HashMap::new();
                 ArithmeticExpression::initialize_hashmap_for_expression(&mut coefficients);
                 ArithmeticExpression::add_symbol_to_coefficients(
@@ -572,28 +710,38 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     &mut coefficients,
                     field,
                 );
-                Linear { coefficients }
+                Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Mul,
+                }, coefficients }
             }
-            (Number { value }, Linear { coefficients })
-            | (Linear { coefficients }, Number { value }) => {
+            (Number { value, expr: lhe }, Linear { coefficients, expr: rhe }) | (Linear { coefficients, expr: lhe }, Number { value, expr: rhe }) => {
                 let mut n_coefficients = coefficients.clone();
                 ArithmeticExpression::multiply_coefficients_by_constant(
                     value,
                     &mut n_coefficients,
                     field,
                 );
-                Linear { coefficients: n_coefficients }
+                Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Mul,
+                }, coefficients: n_coefficients }
             }
-            (Number { value }, Quadratic { a, b, c })
-            | (Quadratic { a, b, c }, Number { value }) => {
+            (Number { value, expr: lhe }, Quadratic { a, b, c, expr: rhe }) | (Quadratic { a, b, c, expr: lhe }, Number { value, expr: rhe }) => {
                 let mut n_a = a.clone();
                 let n_b = b.clone();
                 let mut n_c = c.clone();
                 ArithmeticExpression::multiply_coefficients_by_constant(value, &mut n_a, field);
                 ArithmeticExpression::multiply_coefficients_by_constant(value, &mut n_c, field);
-                Quadratic { a: n_a, b: n_b, c: n_c }
+                Quadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Mul,
+                }, a: n_a, b: n_b, c: n_c }
             }
-            (Signal { symbol: symbol_0 }, Signal { symbol: symbol_1 }) => {
+            (Signal { symbol: symbol_0, expr: lhe }, Signal { symbol: symbol_1, expr: rhe }) => {
                 let mut a = HashMap::new();
                 let mut b = HashMap::new();
                 let mut c = HashMap::new();
@@ -612,10 +760,13 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     &mut b,
                     field,
                 );
-                Quadratic { a, b, c }
+                Quadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Mul,
+                }, a, b, c }
             }
-            (Signal { symbol }, Linear { coefficients })
-            | (Linear { coefficients }, Signal { symbol }) => {
+            (Signal { symbol, expr: lhe }, Linear { coefficients, expr: rhe }) | (Linear { coefficients, expr: lhe }, Signal { symbol, expr: rhe }) => {
                 let a = coefficients.clone();
                 let mut b = HashMap::new();
                 let mut c = HashMap::new();
@@ -627,14 +778,22 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     &mut b,
                     field,
                 );
-                Quadratic { a, b, c }
+                Quadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Mul,
+                }, a, b, c }
             }
-            (Linear { coefficients: coefficients_0 }, Linear { coefficients: coefficients_1 }) => {
+            (Linear { coefficients: coefficients_0 , expr: lhe}, Linear { coefficients: coefficients_1 , expr: rhe}) => {
                 let a = coefficients_0.clone();
                 let b = coefficients_1.clone();
                 let mut c = HashMap::new();
                 ArithmeticExpression::initialize_hashmap_for_expression(&mut c);
-                Quadratic { a, b, c }
+                Quadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Mul,
+                }, a, b, c }
             }
         }
     }
@@ -644,7 +803,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        let minus_one = Number { value: BigInt::from(-1) };
+        let minus_one = Number { value: BigInt::from(-1), expr: HExpr::Number { value: BigInt::from(-1) } };
         let step_one = ArithmeticExpression::mul(&minus_one, right, field);
         ArithmeticExpression::add(left, &step_one, field)
     }
@@ -656,11 +815,15 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
     ) -> Result<ArithmeticExpression<C>, ArithmeticError> {
         use ArithmeticExpression::*;
         match (left, right) {
-            (Number { value: value_0 }, Number { value: value_1 }) => {
+            (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) => {
                 let value = modular_arithmetic::div(value_0, value_1, field)?;
-                Result::Ok(Number { value })
+                Result::Ok(Number { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Div,
+                }, value })
             }
-            (Signal { symbol }, Number { value }) => {
+            (Signal { symbol , expr: lhe}, Number { value , expr: rhe}) => {
                 let mut coefficients = HashMap::new();
                 ArithmeticExpression::initialize_hashmap_for_expression(&mut coefficients);
                 ArithmeticExpression::add_symbol_to_coefficients(
@@ -674,27 +837,39 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
                     &mut coefficients,
                     field,
                 )?;
-                Result::Ok(Linear { coefficients })
+                Result::Ok(Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Div,
+                }, coefficients })
             }
-            (Linear { coefficients }, Number { value }) => {
+            (Linear { coefficients , expr: lhe}, Number { value , expr: rhe}) => {
                 let mut coefficients = coefficients.clone();
                 ArithmeticExpression::divide_coefficients_by_constant(
                     value,
                     &mut coefficients,
                     field,
                 )?;
-                Result::Ok(Linear { coefficients })
+                Result::Ok(Linear { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Div,
+                }, coefficients })
             }
-            (Quadratic { a, b, c }, Number { value }) => {
+            (Quadratic { a, b, c , expr: lhe}, Number { value , expr: rhe}) => {
                 let mut a = a.clone();
                 let b = b.clone();
                 let mut c = c.clone();
                 ArithmeticExpression::divide_coefficients_by_constant(value, &mut a, field)?;
                 ArithmeticExpression::divide_coefficients_by_constant(value, &mut c, field)?;
-                Result::Ok(Quadratic { a, b, c })
+                Result::Ok(Quadratic { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Div,
+                }, a, b, c })
             }
             _ => {
-                Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "/"))
+                Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::Div))
             }
         }
     }
@@ -705,12 +880,16 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
     ) -> Result<ArithmeticExpression<C>, ArithmeticError> {
         use ArithmeticExpression::*;
         match (left, right) {
-            (Number { value: value_0 }, Number { value: value_1 }) => {
+            (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) => {
                 let value = modular_arithmetic::idiv(value_0, value_1, field)?;
-                Result::Ok(Number { value })
+                Result::Ok(Number { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::IntDiv,
+                }, value })
             }
             _ => {
-                Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "\\"))
+                Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::IntDiv))
             }
         }
     }
@@ -720,11 +899,15 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> Result<ArithmeticExpression<C>, ArithmeticError> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
+        if let (Number { value: value_0, expr: lhe }, Number { value: value_1, expr: rhe }) = (left, right) {
             let value = modular_arithmetic::mod_op(value_0, value_1, field)?;
-            Result::Ok(Number { value })
+            Result::Ok(Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::Mod,
+            }, value })
         } else {
-            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "%"))
+            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::Mod))
         }
     }
     pub fn pow(
@@ -734,28 +917,31 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
         match (left, right) {
-            (Number { value: value_0 }, Number { value: value_1 }) => {
-                let value = modular_arithmetic::pow(value_0, value_1, field);
-                Number { value }
+            (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) => {
+                Number { expr: HExpr::InfixOp {
+                    lhe: Box::new(lhe.clone()),
+                    rhe: Box::new(rhe.clone()),
+                    infix_op: ExpressionInfixOpcode::Pow,
+                }, value: modular_arithmetic::pow(value_0, value_1, field) }
             }
-            (Signal { symbol }, Number { value }) if *value == BigInt::from(2) => {      
-                let left = Signal { symbol: symbol.clone() };
-                let right = Signal { symbol: symbol.clone() };
+            (Signal { symbol , expr: lhe }, Number { value , .. }) if *value == BigInt::from(2) => {
+                let left = Signal { symbol: symbol.clone(), expr: lhe.clone() };
+                let right = Signal { symbol: symbol.clone(), expr: lhe.clone() };
                 ArithmeticExpression::mul(&left, &right, field)
             }
-            (Linear { coefficients }, Number {value}) if *value == BigInt::from(2) => {
-                let left = Linear { coefficients: coefficients.clone() };
-                let right = Linear { coefficients: coefficients.clone() };
+            (Linear { coefficients , expr: lhe}, Number { value , .. }) if *value == BigInt::from(2) => {
+                let left = Linear { coefficients: coefficients.clone(), expr: lhe.clone() };
+                let right = Linear { coefficients: coefficients.clone(), expr: lhe.clone() };
                 ArithmeticExpression::mul(&left, &right, field)
             }
             _ => {
-                ArithmeticExpression::nonquadratic_infix(left, right, "**")
+                ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::Pow)
             }
         }
     }
     pub fn prefix_sub(elem: &ArithmeticExpression<C>, field: &BigInt) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        let minus_one = Number { value: BigInt::from(-1) };
+        let minus_one = Number { value: BigInt::from(-1), expr: HExpr::Number { value: BigInt::from(-1) } };
         ArithmeticExpression::mul(elem, &minus_one, field)
     }
 
@@ -765,10 +951,13 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let Number { value } = elem {
-            Number { value: modular_arithmetic::complement(value, field) }
+        if let Number { value, expr: rhe } = elem {
+            Number { expr: HExpr::PrefixOp {
+                rhe: Box::new(rhe.clone()),
+                prefix_op: ExpressionPrefixOpcode::Complement,
+            }, value: modular_arithmetic::complement(value, field) }
         } else {
-            ArithmeticExpression::nonquadratic_prefix("~", elem)
+            ArithmeticExpression::nonquadratic_prefix(elem, &ExpressionPrefixOpcode::Complement)
         }
     }
 
@@ -778,11 +967,15 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> Result<ArithmeticExpression<C>, ArithmeticError> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
             let shifted_elem = modular_arithmetic::shift_l(value_0, value_1, field)?;
-            Result::Ok(Number { value: shifted_elem })
+            Result::Ok(Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::ShiftL,
+            }, value: shifted_elem })
         } else {
-            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, "<<"))
+            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::ShiftL))
         }
     }
     pub fn shift_r(
@@ -791,11 +984,15 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> Result<ArithmeticExpression<C>, ArithmeticError> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
             let shifted_elem = modular_arithmetic::shift_r(value_0, value_1, field)?;
-            Result::Ok(Number { value: shifted_elem })
+            Result::Ok(Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::ShiftR,
+            }, value: shifted_elem })
         } else {
-            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, ">>"))
+            Result::Ok(ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::ShiftR))
         }
     }
     pub fn bit_or(
@@ -804,11 +1001,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::bit_or(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::BitOr,
+            }, value: modular_arithmetic::bit_or(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "|")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::BitOr)
         }
     }
     pub fn bit_and(
@@ -817,11 +1017,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::bit_and(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::BitAnd,
+            }, value: modular_arithmetic::bit_and(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "&")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::BitAnd)
         }
     }
     pub fn bit_xor(
@@ -830,18 +1033,21 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::bit_xor(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::BitXor,
+            }, value: modular_arithmetic::bit_xor(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "^")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::BitXor)
         }
     }
 
     // Boolean operations
     pub fn get_boolean_equivalence(elem: &ArithmeticExpression<C>, field: &BigInt) -> Option<bool> {
         use ArithmeticExpression::*;
-        if let Number { value } = elem {
+        if let Number { value , .. } = elem {
             Option::Some(modular_arithmetic::as_bool(value, field))
         } else {
             Option::None
@@ -849,11 +1055,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
     }
     pub fn not(elem: &ArithmeticExpression<C>, field: &BigInt) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let Number { value } = elem {
+        if let Number { value, expr } = elem {
             let value = modular_arithmetic::not(value, field);
-            Number { value }
+            Number { expr: HExpr::PrefixOp {
+                rhe: Box::new(expr.clone()),
+                prefix_op: ExpressionPrefixOpcode::BoolNot,
+            }, value }
         } else {
-            ArithmeticExpression::nonquadratic_prefix("!", elem)
+            ArithmeticExpression::nonquadratic_prefix(elem, &ExpressionPrefixOpcode::BoolNot)
         }
     }
     pub fn bool_or(
@@ -862,11 +1071,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::bool_or(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::BoolOr,
+            }, value: modular_arithmetic::bool_or(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "||")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::BoolOr)
         }
     }
     pub fn bool_and(
@@ -875,11 +1087,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::bool_and(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::BoolAnd,
+            }, value: modular_arithmetic::bool_and(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "&&")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::BoolAnd)
         }
     }
     pub fn eq(
@@ -888,11 +1103,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::eq(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::Eq,
+            }, value: modular_arithmetic::eq(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "==")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::Eq)
         }
     }
     pub fn not_eq(
@@ -901,11 +1119,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::not_eq(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::NotEq,
+            }, value: modular_arithmetic::not_eq(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "!=")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::NotEq)
         }
     }
     pub fn lesser(
@@ -914,11 +1135,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::lesser(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::Lesser,
+            }, value: modular_arithmetic::lesser(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "<")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::Lesser)
         }
     }
     pub fn lesser_eq(
@@ -927,11 +1151,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::lesser_eq(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::LesserEq,
+            }, value: modular_arithmetic::lesser_eq(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, "<=")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::LesserEq)
         }
     }
     pub fn greater(
@@ -940,11 +1167,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::greater(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::Greater,
+            }, value: modular_arithmetic::greater(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, ">")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::Greater)
         }
     }
     pub fn greater_eq(
@@ -953,11 +1183,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         use ArithmeticExpression::*;
-        if let (Number { value: value_0 }, Number { value: value_1 }) = (left, right) {
-            let value = modular_arithmetic::greater_eq(value_0, value_1, field);
-            Number { value }
+        if let (Number { value: value_0 , expr: lhe}, Number { value: value_1 , expr: rhe}) = (left, right) {
+            Number { expr: HExpr::InfixOp {
+                lhe: Box::new(lhe.clone()),
+                rhe: Box::new(rhe.clone()),
+                infix_op: ExpressionInfixOpcode::GreaterEq,
+            }, value: modular_arithmetic::greater_eq(value_0, value_1, field) }
         } else {
-            ArithmeticExpression::nonquadratic_infix(left, right, ">=")
+            ArithmeticExpression::nonquadratic_infix(left, right, &ExpressionInfixOpcode::GreaterEq)
         }
     }
 
@@ -969,27 +1202,29 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
     ) {
         use ArithmeticExpression::*;
         match expr {
-            Linear { coefficients } => {
+            Linear { coefficients, expr } => {
                raw_substitution(coefficients, substitution, field);
                *coefficients = remove_zero_value_coefficients(std::mem::take(coefficients));
+               *expr = HExpr::Unknown;
             }
-            Signal { symbol } if *symbol == substitution.from => {
-                *expr = Linear { coefficients: substitution.to.clone() };
+            Signal { symbol, .. } if *symbol == substitution.from => {
+                *expr = Linear { coefficients: substitution.to.clone(), expr: HExpr::Unknown };
             }
-            Quadratic { a, b, c } => {
+            Quadratic { a, b, c, expr } => {
                 raw_substitution(a, substitution, field);
                 *a = remove_zero_value_coefficients(std::mem::take(a));
                 raw_substitution(b, substitution, field);
                 *b = remove_zero_value_coefficients(std::mem::take(b));
                 raw_substitution(c, substitution, field);
                 *c = remove_zero_value_coefficients(std::mem::take(c));
+                *expr = HExpr::Unknown;
             }
             _ => {}
         }
     }
     pub fn get_usize(expr: &ArithmeticExpression<C>) -> Option<usize> {
         use ArithmeticExpression::*;
-        if let Number { value } = expr {
+        if let Number { value, .. } = expr {
             value.to_usize()
         } else {
             Option::None
@@ -1012,21 +1247,21 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         let c: C = ArithmeticExpression::constant_coefficient();
         let expr = if HashMap::len(&map) == 1 && HashMap::contains_key(&map, &c) {
             let value = HashMap::remove(&mut map, &c).unwrap();
-            ArithmeticExpression::Number { value }
+            ArithmeticExpression::Number { value, expr: HExpr::Unknown }
         } else if HashMap::len(&map) == 1 {
             let mut values: Vec<_> = map.values().cloned().collect();
             let mut symbols: Vec<_> = map.keys().cloned().collect();
             let symbol = symbols.pop().unwrap();
             let value = values.pop().unwrap();
             if value == BigInt::from(1) {
-                ArithmeticExpression::Signal { symbol }
+                ArithmeticExpression::Signal { symbol , expr: HExpr::Unknown }
             } else {
                 ArithmeticExpression::initialize_hashmap_for_expression(&mut map);
-                ArithmeticExpression::Linear { coefficients: map }
+                ArithmeticExpression::Linear { coefficients: map, expr: HExpr::Unknown }
             }
         } else {
             ArithmeticExpression::initialize_hashmap_for_expression(&mut map);
-            ArithmeticExpression::Linear { coefficients: map }
+            ArithmeticExpression::Linear { coefficients: map, expr: HExpr::Unknown }
         };
         expr
     }
@@ -1051,17 +1286,17 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Substitution<C> {
     pub fn new(from: C, to: ArithmeticExpression<C>) -> Option<Substitution<C>> {
         use ArithmeticExpression::*;
         match to {
-            Number { value } => {
+            Number { value, .. } => {
                 let mut to = HashMap::new();
                 to.insert(ArithmeticExpression::constant_coefficient(), value);
                 Option::Some(Substitution { from, to })
             }
-            Signal { symbol } => {
+            Signal { symbol, .. } => {
                 let mut to = HashMap::new();
                 to.insert(symbol, BigInt::from(1));
                 Option::Some(Substitution { from, to })
             }
-            Linear { coefficients: to } if !to.contains_key(&from) => {
+            Linear { coefficients: to, .. } if !to.contains_key(&from) => {
                 Option::Some(Substitution { from, to })
             }
             _ => Option::None,
@@ -1106,7 +1341,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Substitution<C> {
         let mut coefficients = substitution.to;
         ArithmeticExpression::initialize_hashmap_for_expression(&mut coefficients);
         coefficients.insert(symbol, BigInt::from(-1 % field));
-        let arith = ArithmeticExpression::Linear { coefficients };
+        let arith = ArithmeticExpression::Linear { coefficients, expr: HExpr::Unknown };
         ArithmeticExpression::transform_expression_to_constraint_form(arith, field).unwrap()
     }
 
@@ -1115,21 +1350,21 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Substitution<C> {
         let mut to = substitution.to;
         let right = if HashMap::len(&to) == 1 && HashMap::contains_key(&to, &c) {
             let value = HashMap::remove(&mut to, &c).unwrap();
-            ArithmeticExpression::Number { value }
+            ArithmeticExpression::Number { value, expr: HExpr::Unknown }
         } else if HashMap::len(&to) == 1 {
             let mut values: Vec<_> = to.values().cloned().collect();
             let mut symbols: Vec<_> = to.keys().cloned().collect();
             let symbol = symbols.pop().unwrap();
             let value = values.pop().unwrap();
             if value == BigInt::from(1) {
-                ArithmeticExpression::Signal { symbol }
+                ArithmeticExpression::Signal { symbol, expr: HExpr::Unknown }
             } else {
                 ArithmeticExpression::initialize_hashmap_for_expression(&mut to);
-                ArithmeticExpression::Linear { coefficients: to }
+                ArithmeticExpression::Linear { coefficients: to, expr: HExpr::Unknown }
             }
         } else {
             ArithmeticExpression::initialize_hashmap_for_expression(&mut to);
-            ArithmeticExpression::Linear { coefficients: to }
+            ArithmeticExpression::Linear { coefficients: to, expr: HExpr::Unknown }
         };
         (substitution.from, right)
     }
@@ -1139,7 +1374,7 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Substitution<C> {
         field: &BigInt,
     ) -> ArithmeticExpression<C> {
         let (left, right) = Substitution::decompose(substitution);
-        let left = ArithmeticExpression::Signal { symbol: left };
+        let left = ArithmeticExpression::Signal { symbol: left, expr: HExpr::Unknown };
         ArithmeticExpression::sub(&right, &left, field)
     }
 
@@ -1394,9 +1629,9 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Constraint<C> {
 
     pub fn into_arithmetic_expressions(self) -> (ArithmeticExpression<C>, ArithmeticExpression<C>, ArithmeticExpression<C>) {
         (
-            ArithmeticExpression::Linear { coefficients: self.a },
-            ArithmeticExpression::Linear { coefficients: self.b },
-            ArithmeticExpression::Linear { coefficients: self.c }
+            ArithmeticExpression::Linear { coefficients: self.a, expr: HExpr::Unknown },
+            ArithmeticExpression::Linear { coefficients: self.b, expr: HExpr::Unknown },
+            ArithmeticExpression::Linear { coefficients: self.c, expr: HExpr::Unknown },
         )
     }
 
@@ -1596,7 +1831,7 @@ pub fn normalize(c: Constraint<usize>, _field: &BigInt) -> Constraint<usize> {
 
 #[cfg(test)]
 mod test {
-    use crate::algebra::{ArithmeticExpression, Constraint, Substitution};
+    use crate::algebra::{ArithmeticExpression, Constraint, HintExpression, Substitution};
     use crate::modular_arithmetic;
     use num_bigint::BigInt;
     use std::collections::HashMap;
@@ -1684,7 +1919,7 @@ mod test {
         let mut to_raw = HashMap::new();
         to_raw.insert(y, y_c);
         to_raw.insert(constant, constant_c);
-        let to = A::Linear { coefficients: to_raw };
+        let to = A::Linear { coefficients: to_raw, expr: HintExpression::Unknown };
         let substitution = S::new(from, to).unwrap();
 
         // result: 3y + 7 = 0

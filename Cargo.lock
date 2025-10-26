@@ -118,6 +118,7 @@ dependencies = [
  "constant_tracking",
  "num-bigint-dig",
  "num-traits",
+ "program_structure",
 ]
 
 [[package]]

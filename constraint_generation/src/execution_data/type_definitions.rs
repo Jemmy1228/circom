@@ -1,7 +1,9 @@
 use super::AExpressionSlice;
 use super::Constraint as ConstraintGen;
 use std::collections::BTreeMap;
+use circom_algebra::algebra::HintAccess;
 use num_bigint_dig::BigInt;
+use program_structure::ast::Access;
 use std::collections::HashSet;
 use std::collections::HashMap;
 
@@ -67,6 +69,7 @@ pub struct AccessingInformationBus {
     pub array_access: Vec<usize>,
     pub field_access: Option<String>,
     pub remaining_access: Option<Box<AccessingInformationBus>>,
+    pub hint_access: Vec<HintAccess>,
 }
 
 
@@ -85,5 +88,6 @@ pub struct AccessingInformation {
     pub before_signal: Vec<usize>,
     pub signal_access: Option<String>,
     pub after_signal: Vec<usize>,
-    pub tag_access: Option<String>
+    pub tag_access: Option<String>,
+    pub hint_access: Vec<HintAccess>,
 }

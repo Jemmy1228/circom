@@ -983,7 +983,7 @@ fn translate_infix_operator(op: ExpressionInfixOpcode) -> OperatorType {
 fn translate_prefix_operator(op: ExpressionPrefixOpcode) -> OperatorType {
     use ExpressionPrefixOpcode::*;
     match op {
-        Sub => OperatorType::PrefixSub,
+        Neg => OperatorType::PrefixSub,
         BoolNot => OperatorType::BoolNot,
         Complement => OperatorType::Complement,
     }

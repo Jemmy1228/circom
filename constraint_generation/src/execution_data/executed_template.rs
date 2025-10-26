@@ -231,7 +231,13 @@ impl ExecutedTemplate {
             } else {
                 writeln!(writer, ",").unwrap();
             }
-            write!(writer, "{{\"$\":\"A\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.to_json()).unwrap();
+            write!(writer,
+                "{{\"$\": \"Stmt\", \"@\": \"Assign\", \"symbol\": \"{}\", \"sym_expr\": {}, \"value\": {}, \"expr\": {}}}",
+                symbol,
+                symbol.to_hint_expr().to_json(),
+                expr.to_json(false),
+                expr.to_json(true),
+            ).unwrap();
         }
     }
 
@@ -242,7 +248,12 @@ impl ExecutedTemplate {
             } else {
                 writeln!(writer, ",").unwrap();
             }
-            write!(writer, "{{\"$\":\"H\",\"s\":\"{}\",\"e\":{}}}", symbol, expr.to_json()).unwrap();
+            write!(writer,
+                "{{\"$\": \"Stmt\", \"@\": \"Hint\", \"symbol\": \"{}\", \"sym_expr\": {}, \"expr\": {}}}",
+                symbol,
+                symbol.to_hint_expr().to_json(),
+                expr.to_json(true),
+            ).unwrap();
         }
     }
 
@@ -253,7 +264,14 @@ impl ExecutedTemplate {
             } else {
                 writeln!(writer, ",").unwrap();
             }
-            write!(writer, "{{\"$\":\"C\",\"l\":{},\"r\":{}}}", left.to_json(), right.to_json()).unwrap();
+
+            write!(writer,
+                "{{\"$\": \"Stmt\", \"@\": \"ConstrainEqual\", \"left_value\": {}, \"right_value\": {}, \"left_expr\": {}, \"right_expr\": {}}}",
+                left.to_json(false),
+                right.to_json(false),
+                left.to_json(true),
+                right.to_json(true),
+            ).unwrap();
         }
     }
 
@@ -292,16 +310,16 @@ impl ExecutedTemplate {
     pub fn export_json_before(&mut self) {
         if let Some(writer) = &mut self.json_writer {
             writeln!(writer, "{{").unwrap();
-            writeln!(writer, "\"template\":\"{}\",", self.template_name).unwrap();
+            writeln!(writer, "\"template\": \"{}\",", self.template_name).unwrap();
 
-            write!(writer, "\"parameters\":[").unwrap();
+            write!(writer, "\"parameters\": [").unwrap();
             {
                 let mut first = true;
                 for (_, data) in self.parameter_instances.clone() {
                     let (_, values) = data.destruct();
                     for value in as_big_int(values) {
                         if !first {
-                            write!(writer, ",").unwrap();
+                            write!(writer, ", ").unwrap();
                         }
                         write!(writer, "{}", value).unwrap();
                         first = false;
@@ -311,7 +329,7 @@ impl ExecutedTemplate {
             }
 
             writeln!(writer, "\"is_parallel\" : {},", self.is_parallel).unwrap();
-            writeln!(writer, "\"instructions\":[").unwrap();
+            writeln!(writer, "\"instructions\": [").unwrap();
             writer.flush().unwrap();
         }
     }
@@ -325,14 +343,14 @@ impl ExecutedTemplate {
             writeln!(writer).unwrap();
             writeln!(writer, "],").unwrap();
 
-            writeln!(writer, "\"signals\":{{").unwrap();
+            writeln!(writer, "\"signals\": {{").unwrap();
             {
                 let mut first = true;
                 for (name, xtype) in &signals {
                     if !first {
                         writeln!(writer, ",").unwrap();
                     }
-                    write!(writer, "\"{}\":\"{}\"", name, xtype).unwrap();
+                    write!(writer, "\"{}\": \"{}\"", name, xtype).unwrap();
                     first = false;
                 }
                 writeln!(writer).unwrap();
@@ -340,7 +358,7 @@ impl ExecutedTemplate {
             }
             std::mem::drop(signals);
 
-            write!(writer, "\"subcomponents\":{{").unwrap();
+            write!(writer, "\"subcomponents\": {{").unwrap();
             if self.subcomponent_declarations.is_empty() {
                 writeln!(writer, "}}").unwrap();
             } else {
@@ -348,9 +366,9 @@ impl ExecutedTemplate {
                 let mut first = true;
                 for (name, node_pointer) in &self.subcomponent_declarations {
                     if !first {
-                        writeln!(writer, ",").unwrap();
+                        writeln!(writer, ", ").unwrap();
                     }
-                    write!(writer, "\"{}\":\"{}\"", name, templates_info[*node_pointer].report_name).unwrap();
+                    write!(writer, "\"{}\": \"{}\"", name, templates_info[*node_pointer].report_name).unwrap();
                     first = false;
                 }
                 writeln!(writer).unwrap();
@@ -870,7 +888,7 @@ fn generate_ordered_bus_symbols(dag: &mut DAG, state: State, config: &OrderedSig
 fn as_big_int(exprs: Vec<ArithmeticExpression<String>>) -> Vec<BigInt> {
     let mut numbers = Vec::with_capacity(exprs.len());
     for e in exprs {
-        if let ArithmeticExpression::Number { value } = e {
+        if let ArithmeticExpression::Number { value, .. } = e {
             numbers.push(value);
         }
     }

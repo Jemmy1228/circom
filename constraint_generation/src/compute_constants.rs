@@ -1,6 +1,6 @@
 use crate::environment_utils::environment::ExecutionEnvironment as EE;
 use crate::environment_utils::slice_types::{TagInfo, AExpressionSlice};
-use circom_algebra::algebra::ArithmeticExpression;
+use circom_algebra::algebra::{ArithmeticExpression, HintExpression};
 use compiler::hir::very_concrete_program::{Argument, TemplateInstance};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
@@ -71,7 +71,7 @@ fn transform_header_into_environment(header: &[Argument]) -> EE {
 fn argument_into_slice(argument: &Argument) -> AExpressionSlice {
     use ArithmeticExpression::Number;
     let arithmetic_expressions: Vec<ArithmeticExpression<String>> =
-        argument.values.iter().map(|v| Number { value: v.clone() }).collect();
+        argument.values.iter().map(|v| Number { value: v.clone(), expr: HintExpression::Number { value: v.clone() }}).collect();
     let dimensions = argument.lengths.clone();
     AExpressionSlice::new_array(dimensions, arithmetic_expressions)
 }

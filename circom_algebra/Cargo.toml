@@ -8,3 +8,4 @@ edition = "2018"
 num-bigint-dig = "0.8.4"
 num-traits = "0.2.6"
 constant_tracking = {path = "../constant_tracking" }
+program_structure = {path = "../program_structure" }

@@ -16,6 +16,8 @@ use super::environment_utils::{
         FoldedResult, FoldedArgument
     },
 };
+use num_bigint::Sign;
+use num_traits::sign;
 use program_structure::wire_data::WireType;
 use crate::{assignment_utils::*, environment_utils::slice_types::AssignmentState};
 
@@ -29,10 +31,11 @@ use super::execution_data::type_definitions::{AccessingInformationBus, Accessing
 use super::{
     ast::*, ArithmeticError, FileID, ProgramArchive, Report, ReportCode, ReportCollection
 };
-use circom_algebra::num_bigint::BigInt;
+use circom_algebra::{algebra::{HintAccess, HintExpression}, num_bigint::BigInt};
 use std::{collections::{BTreeMap, HashMap}, io::Write, path::PathBuf};
 use crate::FlagsExecution;
 type AExpr = ArithmeticExpressionGen<String>;
+type HExpr = HintExpression;
 type AnonymousComponentsInfo = BTreeMap<String, (Meta, Vec<Expression>)>;
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
@@ -78,7 +81,7 @@ impl RuntimeInformation {
 
 struct FoldedValue {
     pub arithmetic_slice: Option<AExpressionSlice>,
-    pub bus_slice: Option<(String, BusSlice)>, // stores the name of the bus and the value
+    pub bus_slice: Option<((String, (String, Vec<HintAccess>)), BusSlice)>, // stores the name of the bus and the value
     pub node_pointer: Option<NodePointer>,
     pub bus_node_pointer: Option<NodePointer>,
     pub is_parallel: Option<bool>,
@@ -196,7 +199,7 @@ pub fn execute_constant_expression(
         Result::Ok(folded_value) => {
             debug_assert!(FoldedValue::valid_arithmetic_slice(&folded_value));
             let value = safe_unwrap_to_single_arithmetic_expression(folded_value, line!());
-            if let AExpr::Number { value } = value {
+            if let AExpr::Number { value, .. } = value {
                 Result::Ok(value)
             } else {
                 unreachable!();
@@ -444,7 +447,7 @@ fn execute_statement(
                             //debug_assert!(possible_constraint.is_some());
                             node.add_instr_hint(&signal_left, &value_right);
                             let signal_name = match signal_left{
-                                AExpr::Signal { symbol } =>{
+                                AExpr::Signal { symbol, .. } =>{
                                     symbol
                                 },
                                 _ => unreachable!()
@@ -517,8 +520,8 @@ fn execute_statement(
                 let  (name_right, slice_right) = safe_unwrap_to_bus_slice(f_right, line!());
                 
                 // Generate an arithmetic slice for the buses left and right
-                let mut signals_values_right: Vec<String> = Vec::new();
-                let mut signals_values_left: Vec<String> = Vec::new();
+                let mut signals_values_right: Vec<(String, HintExpression)> = Vec::new();
+                let mut signals_values_left: Vec<(String, HintExpression)> = Vec::new();
                 
                 // Check that the dimensions of the slices are equal
                 let correct_dims_result = BusSlice::check_correct_dims(&slice_left, &Vec::new(), &slice_right, true);
@@ -574,15 +577,31 @@ fn execute_statement(
                     )?;
                     let string_index = create_index_appendix(&access_index); 
 
+                    let (sumbol_right, mut access_right) = name_right.1.clone();
+                    let (symbol_left, mut access_left) = name_left.1.clone();
+                    for acc in access_index {
+                        access_right.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(acc) }));
+                        access_left.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(acc) }));
+                    }
+
                     for s in &inside_bus_signals{
+                        let mut access_right = access_right.clone();
+                        access_right.push(HintAccess::ComponentAccess(s.clone()));
                         signals_values_right.push(
-                            format!(
-                                "{}{}{}", name_right, string_index, s.clone()
-                        ));
+                            (
+                                format!("{}{}{}", name_right.0, string_index, s.clone()),
+                                HExpr::Symbol { symbol: sumbol_right.clone(), access: access_right.clone() }
+                            )
+                        );
+
+                        let mut access_left = access_left.clone();
+                        access_left.push(HintAccess::ComponentAccess(s.clone()));
                         signals_values_left.push(
-                            format!(
-                                "{}{}{}", name_left, string_index, s.clone()
-                        ));
+                            (
+                                format!("{}{}{}", name_left.0, string_index, s.clone()),
+                                HExpr::Symbol { symbol: symbol_left.clone(), access: access_left.clone() }
+                            )
+                        );
                     }
                          
                 }
@@ -590,12 +609,12 @@ fn execute_statement(
                 // Transform the signal names into Arithmetic Expressions
                 let mut ae_signals_left = Vec::new();
                 for signal_name in signals_values_left{
-                    ae_signals_left.push(AExpr::Signal { symbol: signal_name });
+                    ae_signals_left.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 });
                 }
 
                 let mut ae_signals_right = Vec::new();
                 for signal_name in signals_values_right{
-                    ae_signals_right.push(AExpr::Signal { symbol: signal_name });
+                    ae_signals_right.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 });
                 }
 
                 (ae_signals_left, ae_signals_right)
@@ -812,7 +831,7 @@ fn execute_statement(
                     for s in &inside_bus_signals{
                         signal_values.push(
                             format!(
-                                "{}{}{}", bus_name, string_index, s.clone()
+                                "{}{}{}", bus_name.0, string_index, s.clone()
                         ));
                     }
                          
@@ -935,7 +954,7 @@ fn execute_expression(
     let mut can_be_simplified = true;
     let res = match expr {
         Number(_, value) => {
-            let a_value = AExpr::Number { value: value.clone() };
+            let a_value = AExpr::Number { value: value.clone(), expr: HExpr::Number { value: value.clone() } };
             let ae_slice = AExpressionSlice::new(&a_value);
             FoldedValue { arithmetic_slice: Option::Some(ae_slice), ..FoldedValue::default() }
         }
@@ -966,6 +985,7 @@ fn execute_expression(
             for dim in arithmetic_slice_array[0].route() {
                 dims.push(*dim);
             }
+            /* Used as a placeholder, values will be inserted later */
             let mut array_slice = AExpressionSlice::new_with_route(&dims, &AExpr::default());
             let mut row: SliceCapacity = 0;
             while row < arithmetic_slice_array.len() {
@@ -1003,6 +1023,7 @@ fn execute_expression(
                     dims.push(*dim);
                 }
     
+                /* Used as a placeholder, values will be inserted later */
                 let mut array_slice = AExpressionSlice::new_with_route(&dims, &AExpr::default());
                 let mut row: SliceCapacity = 0;
                 while row < usable_dimension {
@@ -1060,43 +1081,29 @@ fn execute_expression(
                 }
             } else {
                 let f_true = execute_expression(if_true, program_archive, runtime, flags)?;
-                let f_false = execute_expression(if_false, program_archive, runtime, flags)?;
-                if FoldedValue::valid_arithmetic_slice(&f_true) && FoldedValue::valid_arithmetic_slice(&f_false) {
-                    let mut aes_true = safe_unwrap_to_arithmetic_slice(f_true, line!());
-                    let mut aes_false = safe_unwrap_to_arithmetic_slice(f_false, line!());
-
-                    let mut ae = Vec::new();
-
-                    for index in 0..AExpressionSlice::get_number_of_cells(&aes_true){
-                        let ae_true = treat_result_with_memory_error(
-                            AExpressionSlice::get_mut_reference_to_single_value_by_index(&mut aes_true, index),
-                            if_true.get_meta(),
-                            &mut runtime.runtime_errors,
-                            &runtime.call_trace,
-                        )?;
-                        let ae_false = treat_result_with_memory_error(
-                            AExpressionSlice::get_mut_reference_to_single_value_by_index(&mut aes_false, index),
-                            if_false.get_meta(),
-                            &mut runtime.runtime_errors,
-                            &runtime.call_trace,
-                        )?;
-
-                        ae.push(AExpr::NonQuadratic {
-                            expr: circom_algebra::algebra::NonQuadraticExpression::InlineSwitch {
-                                condition: Box::new(ae_cond.clone()),
-                                true_case: Box::new(std::mem::take(ae_true)),
-                                false_case: Box::new(std::mem::take(ae_false)),
-                            }
-                        });
-                    }
-                    let arithmetic_slice = Option::Some(
-                        AExpressionSlice::new_array(aes_true.route().to_vec(), ae)
-                    );
-                    FoldedValue { arithmetic_slice, ..FoldedValue::default() }
+                let ae_true = safe_unwrap_to_arithmetic_slice(f_true, line!());
+                let exp_true = if ae_true.is_single() {
+                    AExpressionSlice::unwrap_to_single(ae_true).to_hint_expr()
                 } else {
-                    let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
-                    FoldedValue { arithmetic_slice, ..FoldedValue::default() }
-                }
+                    let (route, values) = ae_true.destruct();
+                    HExpr::MemorySlice { route, values: values.iter().map(|v| v.to_hint_expr()).collect() }
+                };
+                let f_false = execute_expression(if_false, program_archive, runtime, flags)?;
+                let ae_false = safe_unwrap_to_arithmetic_slice(f_false, line!());
+                let exp_false = if ae_false.is_single() {
+                    AExpressionSlice::unwrap_to_single(ae_false).to_hint_expr()
+                } else {
+                    let (route, values) = ae_false.destruct();
+                    HExpr::MemorySlice { route, values: values.iter().map(|v| v.to_hint_expr()).collect() }
+                };
+                let conditional_expression = AExpr::NonQuadratic { expr: HExpr::InlineSwitch {
+                    condition: Box::new(ae_cond.to_hint_expr()),
+                    if_true: Box::new(exp_true),
+                    if_false: Box::new(exp_false),
+                } };
+
+                let arithmetic_slice = Option::Some(AExpressionSlice::new(&conditional_expression));
+                FoldedValue { arithmetic_slice, ..FoldedValue::default() }
             }
         }
         Call { id, args, meta, .. } => {
@@ -1450,10 +1457,8 @@ fn perform_assign(
             r_tags = TagWire::default();
         }
         if accessing_information.undefined {
-            let new_value =
-                AExpressionSlice::new_with_route(symbol_content.route(), &AExpr::default());
             let memory_result =
-                AExpressionSlice::insert_values(symbol_content, &vec![], &new_value, false);
+                AExpressionSlice::insert_values(symbol_content, &vec![], &r_slice, false);
             treat_result_with_memory_error_void(
                 memory_result,
                 meta,
@@ -1462,7 +1467,6 @@ fn perform_assign(
             )?;
             *symbol_tags = TagInfo::new();
         } else {
-
             let memory_result = AExpressionSlice::insert_values(
                 symbol_content,
                 &accessing_information.before_signal,
@@ -1526,7 +1530,7 @@ fn perform_assign(
         }    
         let arithmetic_slice = r_folded.arithmetic_slice.unwrap();
         let value_aux = AExpressionSlice::unwrap_to_single(arithmetic_slice);
-        let value = if let ArithmeticExpressionGen::Number { value } = value_aux {
+        let value = if let ArithmeticExpressionGen::Number { value, .. } = value_aux {
             value
         } else {
             treat_result_with_execution_error(
@@ -1614,7 +1618,7 @@ fn perform_assign(
         unfold_signals(full_symbol, 0, r_slice.route(), &mut l_signal_names);
         let mut l_expressions = Vec::new();
         for signal_name in l_signal_names{
-            l_expressions.push(AExpr::Signal { symbol: signal_name });
+            l_expressions.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
         }
         let l_slice = AExpressionSlice::new_array(r_slice.route().to_vec(), l_expressions);
 
@@ -1737,8 +1741,8 @@ fn perform_assign(
                             goes_to: node_pointer,
                             indexed_with: accessing_information.array_access.clone(),
                         };
-                        node.add_instr_component(&full_symbol, node_pointer);
-                        node.add_arrow(full_symbol.clone(), data);
+                        node.add_instr_component(&full_symbol.0, node_pointer);
+                        node.add_arrow(full_symbol.0.clone(), data);
                     },
                     ExecutedStructure::Bus(_) =>{
                         unreachable!();
@@ -1798,7 +1802,7 @@ fn perform_assign(
                     unfold_signals(full_symbol, 0, arithmetic_slice.route(), &mut l_signal_names);
                     let mut l_expressions = Vec::new();
                     for signal_name in l_signal_names{
-                        l_expressions.push(AExpr::Signal { symbol: signal_name });
+                        l_expressions.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
                     }
                     let l_slice = AExpressionSlice::new_array(arithmetic_slice.route().to_vec(), l_expressions);
 
@@ -1816,8 +1820,8 @@ fn perform_assign(
                     };
 
                     // Generate an arithmetic slice for the buses left and right
-                    let mut signals_values_right: Vec<String> = Vec::new();
-                    let mut signals_values_left: Vec<String> = Vec::new();
+                    let mut signals_values_right: Vec<(String, HintExpression)> = Vec::new();
+                    let mut signals_values_left: Vec<(String, HintExpression)> = Vec::new();
 
 
                     // Generate the arithmetic slices containing the signals
@@ -1847,15 +1851,31 @@ fn perform_assign(
                         )?;
                         let string_index = create_index_appendix(&access_index); 
 
+                        let (sumbol_right, mut access_right) = name_bus.1.clone();
+                        let (symbol_left, mut access_left) = full_symbol.1.clone();
+                        for acc in access_index {
+                            access_right.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(acc) }));
+                            access_left.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(acc) }));
+                        }
+
                         for s in &inside_bus_signals{
+                            let mut access_right = access_right.clone();
+                            access_right.push(HintAccess::ComponentAccess(s.clone()));
                             signals_values_right.push(
-                                format!(
-                                    "{}{}{}", name_bus, string_index, s.clone()
-                            ));
+                                (
+                                    format!("{}{}{}", name_bus.0, string_index, s.clone()),
+                                    HExpr::Symbol { symbol: sumbol_right.clone(), access: access_right.clone() }
+                                )
+                            );
+
+                            let mut access_left = access_left.clone();
+                            access_left.push(HintAccess::ComponentAccess(s.clone()));
                             signals_values_left.push(
-                                format!(
-                                    "{}{}{}", full_symbol, string_index, s.clone()
-                            ));
+                                (
+                                    format!("{}{}{}", full_symbol.0, string_index, s.clone()),
+                                    HExpr::Symbol { symbol: symbol_left.clone(), access: access_left.clone() }
+                                )
+                            );
                         }        
                     } 
 
@@ -1863,11 +1883,11 @@ fn perform_assign(
 
                     let mut ae_signals_right = Vec::new();
                     for signal_name in signals_values_right{
-                        ae_signals_right.push(AExpr::Signal { symbol: signal_name });
+                        ae_signals_right.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 });
                     }
                     let mut ae_signals_left = Vec::new();
                     for signal_name in signals_values_left{
-                        ae_signals_left.push(AExpr::Signal { symbol: signal_name });
+                        ae_signals_left.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 });
                     }
                     
                     let memory_response = 
@@ -2178,7 +2198,7 @@ fn perform_assign(
                 unfold_signals(full_symbol, 0, arithmetic_slice.route(), &mut l_signal_names);
                 let mut l_expressions = Vec::new();
                 for signal_name in l_signal_names{
-                    l_expressions.push(AExpr::Signal { symbol: signal_name });
+                    l_expressions.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
                 }
                 let l_slice = AExpressionSlice::new_array(arithmetic_slice.route().to_vec(), l_expressions);
                 Some((l_slice, arithmetic_slice))
@@ -2209,7 +2229,7 @@ fn perform_assign(
                 assert!(accessing_information.field_access.is_some());
                 let arithmetic_slice = r_folded.arithmetic_slice.unwrap();
                 let value_aux = AExpressionSlice::unwrap_to_single(arithmetic_slice);
-                let value = if let ArithmeticExpressionGen::Number { value } = value_aux {
+                let value = if let ArithmeticExpressionGen::Number { value, .. } = value_aux {
                     value
                 } else {
                     treat_result_with_execution_error(
@@ -2295,8 +2315,8 @@ fn perform_assign(
                 )?;
 
                 // Generate an arithmetic slice for the accessed buses
-                let mut signals_values_left: Vec<String> = Vec::new();
-                let mut signals_values_right = Vec::new();
+                let mut signals_values_left: Vec<(String, HintExpression)> = Vec::new();
+                let mut signals_values_right: Vec<(String, HintExpression)> = Vec::new();
                 
                 // We assume that the buses in the slice are all of the same type
                 // Use just the first to generate the bus accesses
@@ -2324,26 +2344,42 @@ fn perform_assign(
                     )?;
                     let string_index = create_index_appendix(&access_index); 
 
+                    let (sumbol_right, mut access_right) = name_bus.1.clone();
+                    let (symbol_left, mut access_left) = full_symbol.1.clone();
+                    for acc in access_index {
+                        access_right.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(acc) }));
+                        access_left.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(acc) }));
+                    }
+
                     for s in &inside_bus_signals{
+                        let mut access_right = access_right.clone();
+                        access_right.push(HintAccess::ComponentAccess(s.clone()));
                         signals_values_right.push(
-                            format!(
-                                "{}{}{}", name_bus, string_index, s.clone()
-                        ));
+                            (
+                                format!("{}{}{}", name_bus.0, string_index, s.clone()),
+                                HExpr::Symbol { symbol: sumbol_right.clone(), access: access_right.clone() }
+                            )
+                        );
+
+                        let mut access_left = access_left.clone();
+                        access_left.push(HintAccess::ComponentAccess(s.clone()));
                         signals_values_left.push(
-                                format!(
-                                "{}{}{}", full_symbol, string_index, s.clone()
-                        ));
+                            (
+                                format!("{}{}{}", full_symbol.0, string_index, s.clone()),
+                                HExpr::Symbol { symbol: symbol_left.clone(), access: access_left.clone() }
+                            )
+                        );
                     }        
                 } 
 
                 // Transform the signal names into AExpr
                 let mut ae_signals_left = Vec::new();
                 for signal_name in signals_values_left{
-                    ae_signals_left.push(AExpr::Signal { symbol: signal_name });
+                    ae_signals_left.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
                 }
                 let mut ae_signals_right = Vec::new();
                 for signal_name in signals_values_right{
-                    ae_signals_right.push(AExpr::Signal { symbol: signal_name });
+                    ae_signals_right.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
                 }
 
                 // Update the left slice
@@ -2394,8 +2430,8 @@ fn perform_assign(
                 )?;
 
                 // Update the left and right slices
-                let mut signals_values_left: Vec<String> = Vec::new();
-                let mut signals_values_right: Vec<String> = Vec::new();
+                let mut signals_values_left: Vec<(String, HintExpression)> = Vec::new();
+                let mut signals_values_right: Vec<(String, HintExpression)> = Vec::new();
 
                 // Generate the arithmetic slices containing the signals
                 // We assume that the buses in the slice are all of the same type
@@ -2424,15 +2460,31 @@ fn perform_assign(
                     )?;
                     let string_index = create_index_appendix(&access_index); 
 
+                    let (sumbol_right, mut access_right) = name_bus.1.clone();
+                    let (symbol_left, mut access_left) = full_symbol.1.clone();
+                    for acc in access_index {
+                        access_right.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(acc) }));
+                        access_left.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(acc) }));
+                    }
+
                     for s in &inside_bus_signals{
+                        let mut access_right = access_right.clone();
+                        access_right.push(HintAccess::ComponentAccess(s.clone()));
                         signals_values_right.push(
-                            format!(
-                                "{}{}{}", name_bus, string_index, s.clone()
-                        ));
+                            (
+                                format!("{}{}{}", name_bus.0, string_index, s.clone()),
+                                HExpr::Symbol { symbol: sumbol_right.clone(), access: access_right.clone() }
+                            )
+                        );
+
+                        let mut access_left = access_left.clone();
+                        access_left.push(HintAccess::ComponentAccess(s.clone()));
                         signals_values_left.push(
-                            format!(
-                                "{}{}{}", full_symbol, string_index, s.clone()
-                        ));
+                            (
+                                format!("{}{}{}", full_symbol.0, string_index, s.clone()),
+                                HExpr::Symbol { symbol: symbol_left.clone(), access: access_left.clone() }
+                            )
+                        );
                     }        
                 } 
 
@@ -2440,11 +2492,11 @@ fn perform_assign(
 
                 let mut ae_signals_left = Vec::new();
                 for signal_name in signals_values_left{
-                    ae_signals_left.push(AExpr::Signal { symbol: signal_name });
+                    ae_signals_left.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
                 }
                 let mut ae_signals_right = Vec::new();
                 for signal_name in signals_values_right{
-                    ae_signals_right.push(AExpr::Signal { symbol: signal_name });
+                    ae_signals_right.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
                 }
                 let l_slice = AExpressionSlice::new_array([ae_signals_left.len()].to_vec(), ae_signals_left);
                 let r_slice = AExpressionSlice::new_array([ae_signals_right.len()].to_vec(), ae_signals_right);
@@ -2630,7 +2682,7 @@ fn create_component_symbol(symbol: &str, access_information: &Vec<usize>) -> Str
     create_array_accessed_symbol(symbol, &access_information)
 }
 
-fn create_symbol(symbol: &str, access_information: &AccessingInformation) -> String {
+fn create_symbol(symbol: &str, access_information: &AccessingInformation) -> (String, (String, Vec<HintAccess>)) {
     let mut appendix = "".to_string();
     let bf_signal = create_index_appendix(&access_information.before_signal);
     let af_signal = create_index_appendix(&access_information.after_signal);
@@ -2640,22 +2692,28 @@ fn create_symbol(symbol: &str, access_information: &AccessingInformation) -> Str
         appendix.push_str(&signal);
     }
     appendix.push_str(&af_signal);
-    format!("{}{}", symbol, appendix)
+    (format!("{}{}", symbol, appendix), (symbol.to_string(), access_information.hint_access.clone()))
 }
 
-fn create_symbol_bus(symbol: &str, access_information: &AccessingInformationBus) -> String {
+fn create_symbol_bus(symbol: &str, access_information: &AccessingInformationBus) -> (String, (String, Vec<HintAccess>)) {
+    fn internal(appendix: &mut String, access_arr: &mut Vec<HintAccess>, access_information: &AccessingInformationBus) {
+        let bf_field = create_index_appendix(&access_information.array_access);
+        appendix.push_str(&bf_field);
+        if let Option::Some(field) = &access_information.field_access {
+            let field = format!(".{}", field);
+            appendix.push_str(&field);
+        }
+        for access in &access_information.hint_access {
+            access_arr.push(access.clone());
+        }
+        if let Option::Some(after_field) = &access_information.remaining_access {
+            internal(appendix, access_arr, after_field)
+        }
+    }
     let mut appendix = symbol.to_string();
-    let bf_field = create_index_appendix(&access_information.array_access);
-    appendix.push_str(&bf_field);
-    if let Option::Some(field) = &access_information.field_access {
-        let field = format!(".{}", field);
-        appendix.push_str(&field);
-    }
-    if let Option::Some(after_field) = &access_information.remaining_access {
-        create_symbol_bus(&appendix, after_field)
-    } else{
-        appendix
-    }
+    let mut access_arr = Vec::new();
+    internal(&mut appendix, &mut access_arr, access_information);
+    (appendix, (symbol.to_string(), access_arr))
 }
 
 
@@ -2686,7 +2744,9 @@ fn execute_variable(
 ) -> Result<FoldedValue, ()> {
     let access_information = treat_accessing(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
-        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
+        let (_, (symbol, hint_access)) = create_symbol(symbol, &access_information);
+        let ae: ArithmeticExpressionGen<String> = AExpr::NonQuadratic { expr: HExpr::Symbol { symbol, access: hint_access } };
+        let arithmetic_slice = Option::Some(AExpressionSlice::new(&ae));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
     debug_assert!(access_information.signal_access.is_none());
@@ -2719,11 +2779,13 @@ fn execute_signal(
     access: &[Access],
     program_archive: &ProgramArchive,
     runtime: &mut RuntimeInformation,
-    flags: FlagsExecution
+    flags: FlagsExecution,
 ) -> Result<FoldedValue, ()> {
     let access_information = treat_accessing(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
-        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
+        let (_, (symbol, hint_access)) = create_symbol(symbol, &access_information);
+        let ae: ArithmeticExpressionGen<String> = AExpr::NonQuadratic { expr: HExpr::Symbol { symbol, access: hint_access } };
+        let arithmetic_slice = Option::Some(AExpressionSlice::new(&ae));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
     debug_assert!(access_information.after_signal.is_empty());
@@ -2750,7 +2812,7 @@ fn execute_signal(
             if let Some(value_tag) = value_tag { // tag has value
                 // access only allowed when (1) it is value defined by user or (2) it is completely assigned
                 if state.value_defined || tag_data.remaining_inserts == 0{
-                    let a_value = AExpr::Number { value: value_tag.clone() };
+                    let a_value = AExpr::Number { value: value_tag.clone(), expr: HExpr::Number { value: value_tag.clone() } };
                     let ae_slice = AExpressionSlice::new(&a_value);
                     Result::Ok(FoldedValue { arithmetic_slice: Option::Some(ae_slice), ..FoldedValue::default() })
                 } else{
@@ -2808,7 +2870,7 @@ fn execute_signal(
     }
 }
 
-fn signal_to_arith(symbol: String, slice: SignalSlice) -> Result<AExpressionSlice, MemoryError> {
+fn signal_to_arith(symbol: (String, (String, Vec<HintAccess>)), slice: SignalSlice) -> Result<AExpressionSlice, MemoryError> {
     let mut expressions = vec![];
     let (route, values) = slice.destruct();
     let mut symbols = vec![];
@@ -2823,7 +2885,7 @@ fn signal_to_arith(symbol: String, slice: SignalSlice) -> Result<AExpressionSlic
 
             }
         }
-        expressions.push(AExpr::Signal { symbol: symbols[index].clone() });
+        expressions.push(AExpr::Signal { symbol: symbols[index].0.clone(), expr: symbols[index].1.clone() } );
         index += 1;
     }
     if index == symbols.len() {
@@ -2834,12 +2896,15 @@ fn signal_to_arith(symbol: String, slice: SignalSlice) -> Result<AExpressionSlic
     // TODO: in case inspect return warning in case might assigned?
 }
 
-fn unfold_signals(current: String, dim: usize, lengths: &[usize], result: &mut Vec<String>) {
+fn unfold_signals(current: (String, (String, Vec<HintAccess>)), dim: usize, lengths: &[usize], result: &mut Vec<(String, HintExpression)>) {
     if dim == lengths.len() {
-        result.push(current);
+        result.push((current.0, HintExpression::Symbol { symbol: current.1.0, access: current.1.1 }));
     } else {
+        let (symbol, access) = current.1;
         for i in 0..lengths[dim] {
-            unfold_signals(format!("{}[{}]", current, i), dim + 1, lengths, result)
+            let mut access = access.clone();
+            access.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(i) }));
+            unfold_signals((format!("{}[{}]", current.0, i), (symbol.clone(), access)), dim + 1, lengths, result)
         }
     }
 }
@@ -2860,7 +2925,9 @@ fn execute_bus(
     };
 
     if access_information.undefined {
-        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
+        let (_, (symbol, hint_access)) = create_symbol_bus(symbol, &access_information);
+        let ae: ArithmeticExpressionGen<String> = AExpr::NonQuadratic { expr: HExpr::Symbol { symbol, access: hint_access } };
+        let arithmetic_slice = Option::Some(AExpressionSlice::new(&ae));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
     let environment_response =
@@ -2909,7 +2976,7 @@ fn execute_bus(
         }
         
 
-        Result::Ok(FoldedValue{bus_slice: Some((symbol.to_string(), bus_slice)), tags: Some(tags_propagated), ..FoldedValue::default()})
+        Result::Ok(FoldedValue{bus_slice: Some((symbol, bus_slice)), tags: Some(tags_propagated), ..FoldedValue::default()})
     } else if is_tag{
         // in this case we access to the value of a tag (of the complete bus or a field)
         let mut to_do_access = &access_information;
@@ -2930,7 +2997,7 @@ fn execute_bus(
         if let Some(value_tag) = value_tag { // tag has value
             // access only allowed when (1) it is value defined by user or (2) it is completely assigned
             if state.value_defined || is_complete{
-                let a_value = AExpr::Number { value: value_tag.clone() };
+                let a_value = AExpr::Number { value: value_tag.clone(), expr: HExpr::Number { value: value_tag.clone() } };
                 let ae_slice = AExpressionSlice::new(&a_value);
                 Result::Ok(FoldedValue { arithmetic_slice: Option::Some(ae_slice), ..FoldedValue::default() })
             } else{
@@ -3044,7 +3111,9 @@ fn execute_component(
         
     let access_information = treat_accessing_bus(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
-        let arithmetic_slice = Option::Some(AExpressionSlice::new(&AExpr::default()));
+        let (_, (symbol, hint_access)) = create_symbol_bus(symbol, &access_information);
+        let ae: ArithmeticExpressionGen<String> = AExpr::NonQuadratic { expr: HExpr::Symbol { symbol, access: hint_access } };
+        let arithmetic_slice = Option::Some(AExpressionSlice::new(&ae));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
 
@@ -3081,7 +3150,7 @@ fn execute_component(
                 &mut runtime.runtime_errors,
                 &runtime.call_trace,
             )?;
-            let a_value = AExpr::Number { value: result };
+            let a_value = AExpr::Number { value: result.clone(), expr: HExpr::Number { value: result.clone() } };
             let ae_slice = AExpressionSlice::new(&a_value);
             Result::Ok(FoldedValue { arithmetic_slice: Option::Some(ae_slice), ..FoldedValue::default() })
 
@@ -3532,7 +3601,7 @@ fn execute_prefix_op(
     let field = runtime.constants.get_p();
     let result = match prefix_op {
         BoolNot => AExpr::not(value, field),
-        Sub => AExpr::prefix_sub(value, field),
+        Neg => AExpr::prefix_sub(value, field),
         Complement => AExpr::complement(value, field),
     };
     Result::Ok(result)
@@ -3664,7 +3733,21 @@ fn treat_accessing(
     } else {
         (Vec::new(), Vec::new())
     };
-    Result::Ok(AccessingInformation { undefined, before_signal, after_signal, signal_access, tag_access})
+
+    let mut hint_access = Vec::new();
+    for acc in access {
+        match acc{
+            Access::ArrayAccess(index) =>{
+                let f_index = execute_expression(index, program_archive, runtime, flags)?;
+                let ae_index = safe_unwrap_to_single_arithmetic_expression(f_index, line!());
+                hint_access.push(HintAccess::ArrayAccess(ae_index.to_hint_expr()));
+            },
+            Access::ComponentAccess(field) =>{
+                hint_access.push(HintAccess::ComponentAccess(field.clone()));
+            }
+        }
+    }
+    Result::Ok(AccessingInformation { undefined, before_signal, after_signal, signal_access, tag_access, hint_access })
 }
 
 
@@ -3718,7 +3801,20 @@ fn treat_accessing_bus(
             remaining_access = None
         };
 
-    Result::Ok(AccessingInformationBus { undefined, array_access, remaining_access, field_access})
+        let mut hint_access = Vec::new();
+        for acc in access.iter().skip(index){
+            match acc{
+                Access::ArrayAccess(index) =>{
+                    let f_index = execute_expression(index, program_archive, runtime, flags)?;
+                    let ae_index = safe_unwrap_to_single_arithmetic_expression(f_index, line!());
+                    hint_access.push(HintAccess::ArrayAccess(ae_index.to_hint_expr()));
+                },
+                Access::ComponentAccess(field) =>{
+                    hint_access.push(HintAccess::ComponentAccess(field.clone()));
+                }
+            }
+        }
+    Result::Ok(AccessingInformationBus { undefined, array_access, remaining_access, field_access, hint_access })
 
     }
 
@@ -3753,7 +3849,7 @@ fn safe_unwrap_to_valid_bus_node_pointer(folded_value: FoldedValue, line: u32) -
     debug_assert!(FoldedValue::valid_bus_node_pointer(&folded_value), "Caused by call at {}", line);
     folded_value.bus_node_pointer.unwrap()
 }
-fn safe_unwrap_to_bus_slice(folded_value: FoldedValue, line: u32) -> (String, BusSlice) {
+fn safe_unwrap_to_bus_slice(folded_value: FoldedValue, line: u32) -> ((String, (String, Vec<HintAccess>)), BusSlice) {
     debug_assert!(FoldedValue::valid_arithmetic_slice(&folded_value), "Caused by call at {}", line);
     folded_value.bus_slice.unwrap()
 }

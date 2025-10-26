@@ -364,7 +364,7 @@ pub enum AssignOp {
     AssignConstraintSignal,
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum ExpressionInfixOpcode {
     Mul,
     Div,
@@ -388,9 +388,9 @@ pub enum ExpressionInfixOpcode {
     BitXor,
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum ExpressionPrefixOpcode {
-    Sub,
+    Neg,
     BoolNot,
     Complement,
 }

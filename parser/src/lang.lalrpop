@@ -775,7 +775,7 @@ Expression0: Expression = {
 ParseExpressionPrefixOpcode: ExpressionPrefixOpcode = {
     "!" => ExpressionPrefixOpcode::BoolNot,
     "~" => ExpressionPrefixOpcode::Complement,
-    "-" => ExpressionPrefixOpcode::Sub,
+    "-" => ExpressionPrefixOpcode::Neg,
 };
 
 ParseBoolOr : ExpressionInfixOpcode = {
