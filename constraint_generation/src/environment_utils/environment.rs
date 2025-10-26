@@ -14,6 +14,7 @@ use super::slice_types::{
 };
 use crate::environment_utils::slice_types::AssignmentState::*;
 use super::{ArithmeticExpression, CircomEnvironment, CircomEnvironmentError};
+use circom_algebra::algebra::PureArithmeticExpression;
 use program_structure::memory_slice::MemoryError;
 use crate::execution_data::type_definitions::TagWire;
 use crate::ast::Meta;
@@ -180,7 +181,18 @@ pub fn environment_shortcut_add_variable(
     variable_name: &str,
     dimensions: &[SliceCapacity],
 ) {
-    let slice = AExpressionSlice::new_with_route(dimensions, &ArithmeticExpression::default());
+    let full_symbol = (variable_name.to_string(), (variable_name.to_string(), vec![]));
+    let mut variable_names = Vec::new();
+    crate::execute::unfold_variables(full_symbol, 0, dimensions, &mut variable_names);
+    let mut expressions = Vec::new();
+    for variable_name in variable_names{
+        expressions.push(ArithmeticExpression {
+            pure: PureArithmeticExpression::default(),
+            hint: variable_name.1.clone(),
+        });
+    }
+    let slice = AExpressionSlice::new_array(dimensions.to_vec(), expressions);
+
     environment.add_variable(variable_name, (TagInfo::new(), slice));
 }
 

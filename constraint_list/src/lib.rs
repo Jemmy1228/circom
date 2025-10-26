@@ -15,7 +15,7 @@ mod non_linear_simplification;
 
 type C = circom_algebra::algebra::Constraint<usize>;
 type S = circom_algebra::algebra::Substitution<usize>;
-type A = circom_algebra::algebra::ArithmeticExpression<usize>;
+type A = circom_algebra::algebra::PureArithmeticExpression<usize>;
 type SignalMap = HashMap<usize, usize>;
 type SEncoded = HashMap<usize, A>;
 type SFrames = LinkedList<SEncoded>;

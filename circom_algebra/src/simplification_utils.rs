@@ -6,7 +6,7 @@ use std::mem::replace;
 
 type C = crate::algebra::Constraint<usize>;
 type S = crate::algebra::Substitution<usize>;
-type A = crate::algebra::ArithmeticExpression<usize>;
+type A = crate::algebra::PureArithmeticExpression<usize>;
 type SH = BTreeMap<usize, S>;
 type SHNotNormalized = BTreeMap<usize, (BigInt, S)>;
 
@@ -248,8 +248,8 @@ fn treat_constraint_2(
         let (in_conflict_coef, in_conflict_subs) = in_conflict.unwrap();
         let right = S::decompose(in_conflict_subs).1;
         let left = S::decompose(substitution).1;
-        let exp_coef_right = A::Number {value : in_conflict_coef, expr: Unknown};
-        let exp_coef_left = A::Number {value : coefficient, expr: Unknown};
+        let exp_coef_right = A::Number {value : in_conflict_coef};
+        let exp_coef_left = A::Number {value : coefficient};
         let new_left  = A::mul(&exp_coef_right,&left,field);
         let new_right  = A::mul(&exp_coef_left,&right,field);
         let merge = A::sub(&new_left, &new_right, field);
@@ -285,8 +285,8 @@ fn treat_constraint_3(
         let (in_conflict_coef, in_conflict_subs) = in_conflict.unwrap();
         let right = S::decompose(in_conflict_subs).1;
         let left = S::decompose(substitution).1;
-        let exp_coef_right = A::Number {value : in_conflict_coef, expr: Unknown};
-        let exp_coef_left = A::Number {value : coefficient, expr: Unknown};
+        let exp_coef_right = A::Number {value : in_conflict_coef};
+        let exp_coef_left = A::Number {value : coefficient};
         let new_left  = A::mul(&exp_coef_right,&left,field);
         let new_right  = A::mul(&exp_coef_left,&right,field);
         let merge = A::sub(&new_left, &new_right, field);
@@ -340,8 +340,8 @@ fn treat_constraint_4(
         let (in_conflict_coef, in_conflict_subs) = in_conflict.unwrap();
         let right = S::decompose(in_conflict_subs).1;
         let left = S::decompose(substitution).1;
-        let exp_coef_right = A::Number {value : in_conflict_coef, expr: Unknown};
-        let exp_coef_left = A::Number {value : coefficient, expr: Unknown};
+        let exp_coef_right = A::Number {value : in_conflict_coef};
+        let exp_coef_left = A::Number {value : coefficient};
         let new_left  = A::mul(&exp_coef_right,&left,field);
         let new_right  = A::mul(&exp_coef_left,&right,field);
         let merge = A::sub(&new_left, &new_right, field);
@@ -428,7 +428,7 @@ fn normalize_substitutions(substitutions: SHNotNormalized, field: &BigInt) -> SH
         let arith_sub = A::hashmap_into_arith(sub.to().clone());
         let mult_by_inverse = A::mul(
             &arith_sub, 
-            &A::Number {value : inv.clone(), expr: Unknown},
+            &A::Number {value : inv.clone()},
             field
         );
         let new_sub = S::new(signal.clone(), mult_by_inverse).unwrap(); 

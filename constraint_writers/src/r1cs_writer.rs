@@ -1,4 +1,4 @@
-use circom_algebra::algebra::ArithmeticExpression;
+use circom_algebra::algebra::PureArithmeticExpression;
 use circom_algebra::num_bigint::BigInt;
 use std::collections::HashMap;
 use std::fs::File;
@@ -288,9 +288,9 @@ impl ConstraintSection {
         field: &BigInt,
     ) -> Result<(), ()> {
         let field_size = self.field_size;
-        let a = ArithmeticExpression::modularize_hashmap(a, field);
-        let b = ArithmeticExpression::modularize_hashmap(b, field);
-        let c = ArithmeticExpression::modularize_hashmap(c, field);
+        let a = PureArithmeticExpression::modularize_hashmap(a, field);
+        let b = PureArithmeticExpression::modularize_hashmap(b, field);
+        let c = PureArithmeticExpression::modularize_hashmap(c, field);
         let mut r1cs_a = HashMap::new();
         for (k, v) in a {
             let (_, bytes) = BigInt::from(k).to_bytes_le();

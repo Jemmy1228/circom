@@ -1,7 +1,7 @@
 use super::executed_bus::BusConnexion;
 use super::type_definitions::*;
 use super::ExecutedBus;
-use circom_algebra::algebra::ArithmeticExpression;
+use circom_algebra::algebra::{ArithmeticExpression, PureArithmeticExpression};
 use compiler::hir::very_concrete_program::*;
 use dag::DAG;
 use num_bigint::BigInt;
@@ -233,10 +233,10 @@ impl ExecutedTemplate {
             }
             write!(writer,
                 "{{\"$\": \"Stmt\", \"@\": \"Assign\", \"symbol\": \"{}\", \"sym_expr\": {}, \"value\": {}, \"expr\": {}}}",
-                symbol,
-                symbol.to_hint_expr().to_json(),
-                expr.to_json(false),
-                expr.to_json(true),
+                symbol.pure.to_string(),
+                symbol.hint.to_json(),
+                expr.pure.to_json(),
+                expr.hint.to_json(),
             ).unwrap();
         }
     }
@@ -250,9 +250,9 @@ impl ExecutedTemplate {
             }
             write!(writer,
                 "{{\"$\": \"Stmt\", \"@\": \"Hint\", \"symbol\": \"{}\", \"sym_expr\": {}, \"expr\": {}}}",
-                symbol,
-                symbol.to_hint_expr().to_json(),
-                expr.to_json(true),
+                symbol.pure.to_string(),
+                symbol.hint.to_json(),
+                expr.hint.to_json(),
             ).unwrap();
         }
     }
@@ -267,10 +267,26 @@ impl ExecutedTemplate {
 
             write!(writer,
                 "{{\"$\": \"Stmt\", \"@\": \"ConstrainEqual\", \"left_value\": {}, \"right_value\": {}, \"left_expr\": {}, \"right_expr\": {}}}",
-                left.to_json(false),
-                right.to_json(false),
-                left.to_json(true),
-                right.to_json(true),
+                left.pure.to_json(),
+                right.pure.to_json(),
+                left.hint.to_json(),
+                right.hint.to_json(),
+            ).unwrap();
+        }
+    }
+
+    pub fn add_instr_var(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
+        if let Some(writer) = &mut self.json_writer {
+            if self.json_first_statement {
+                self.json_first_statement = false;
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer,
+                "{{\"$\": \"Stmt\", \"@\": \"AssignVar\", \"symbol\": \"{}\", \"sym_expr\": {}, \"expr\": {}}}",
+                symbol.pure.to_string(),
+                symbol.hint.to_json(),
+                expr.hint.to_json(),
             ).unwrap();
         }
     }
@@ -888,7 +904,7 @@ fn generate_ordered_bus_symbols(dag: &mut DAG, state: State, config: &OrderedSig
 fn as_big_int(exprs: Vec<ArithmeticExpression<String>>) -> Vec<BigInt> {
     let mut numbers = Vec::with_capacity(exprs.len());
     for e in exprs {
-        if let ArithmeticExpression::Number { value, .. } = e {
+        if let PureArithmeticExpression::Number { value, .. } = e.pure {
             numbers.push(value);
         }
     }

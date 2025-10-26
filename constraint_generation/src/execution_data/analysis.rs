@@ -1,7 +1,7 @@
 use circom_algebra::algebra;
 use num_bigint::BigInt;
 
-type AExpr = algebra::ArithmeticExpression<String>;
+type AExpr = algebra::PureArithmeticExpression<String>;
 
 pub struct Analysis {
     reached: Vec<bool>,

@@ -31,10 +31,11 @@ use super::execution_data::type_definitions::{AccessingInformationBus, Accessing
 use super::{
     ast::*, ArithmeticError, FileID, ProgramArchive, Report, ReportCode, ReportCollection
 };
-use circom_algebra::{algebra::{HintAccess, HintExpression}, num_bigint::BigInt};
+use circom_algebra::{algebra::{HintAccess, HintExpression, PureArithmeticExpression}, num_bigint::BigInt};
 use std::{collections::{BTreeMap, HashMap}, io::Write, path::PathBuf};
 use crate::FlagsExecution;
 type AExpr = ArithmeticExpressionGen<String>;
+type PExpr = PureArithmeticExpression<String>;
 type HExpr = HintExpression;
 type AnonymousComponentsInfo = BTreeMap<String, (Meta, Vec<Expression>)>;
 
@@ -199,7 +200,7 @@ pub fn execute_constant_expression(
         Result::Ok(folded_value) => {
             debug_assert!(FoldedValue::valid_arithmetic_slice(&folded_value));
             let value = safe_unwrap_to_single_arithmetic_expression(folded_value, line!());
-            if let AExpr::Number { value, .. } = value {
+            if let PExpr::Number { value, .. } = value.pure {
                 Result::Ok(value)
             } else {
                 unreachable!();
@@ -391,8 +392,7 @@ fn execute_statement(
 
 
             if let Option::Some(node) = actual_node {
-                if *op == AssignOp::AssignConstraintSignal || *op == AssignOp::AssignSignal{
-                    debug_assert!(possible_constraint.is_some());
+                if possible_constraint.is_some(){
                     
                     if *op == AssignOp::AssignConstraintSignal && runtime.block_type == BlockType::Unknown{
                         // Case not valid constraint Known/Unknown
@@ -427,7 +427,7 @@ fn execute_statement(
                         )?;
 
                         if let AssignOp::AssignConstraintSignal = op {
-                            if value_right.is_nonquadratic() {
+                            if value_right.pure.is_nonquadratic() {
                                 let err = Result::Err(ExecutionError::NonQuadraticConstraint);
                                 treat_result_with_execution_error(
                                     err,
@@ -440,22 +440,26 @@ fn execute_statement(
                                 let symbol = signal_left;
                                 node.add_instr_assign(&symbol, &value_right);
                                 let expr = AExpr::sub(&symbol, &value_right, &p);
-                                let ctr = AExpr::transform_expression_to_constraint_form(expr, &p).unwrap();
+                                let ctr = PExpr::transform_expression_to_constraint_form(expr.pure, &p).unwrap();
                                 node.add_constraint(ctr);
                             }
                         } else if let AssignOp::AssignSignal = op {// needs fix, check case arrays
                             //debug_assert!(possible_constraint.is_some());
                             node.add_instr_hint(&signal_left, &value_right);
-                            let signal_name = match signal_left{
-                                AExpr::Signal { symbol, .. } =>{
+                            let signal_name = match signal_left.pure{
+                                PExpr::Signal { symbol, .. } =>{
                                     symbol
                                 },
                                 _ => unreachable!()
                             };
                             
-                            if !value_right.is_nonquadratic() && !node.is_custom_gate {
+                            if !value_right.pure.is_nonquadratic() && !node.is_custom_gate {
                                 needs_double_arrow.push(signal_name);
                             }
+                        } else if AssignOp::AssignVar == *op{
+                            node.add_instr_var(&signal_left, &value_right);
+                        } else {
+                            unreachable!()
                         }
                     }
 
@@ -590,7 +594,7 @@ fn execute_statement(
                         signals_values_right.push(
                             (
                                 format!("{}{}{}", name_right.0, string_index, s.clone()),
-                                HExpr::Symbol { symbol: sumbol_right.clone(), access: access_right.clone() }
+                                HExpr::Signal { symbol: sumbol_right.clone(), access: access_right.clone() }
                             )
                         );
 
@@ -599,7 +603,7 @@ fn execute_statement(
                         signals_values_left.push(
                             (
                                 format!("{}{}{}", name_left.0, string_index, s.clone()),
-                                HExpr::Symbol { symbol: symbol_left.clone(), access: access_left.clone() }
+                                HExpr::Signal { symbol: symbol_left.clone(), access: access_left.clone() }
                             )
                         );
                     }
@@ -607,14 +611,20 @@ fn execute_statement(
                 }
 
                 // Transform the signal names into Arithmetic Expressions
-                let mut ae_signals_left = Vec::new();
+                let mut ae_signals_left: Vec<AExpr> = Vec::new();
                 for signal_name in signals_values_left{
-                    ae_signals_left.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 });
+                    ae_signals_left.push(AExpr{
+                        pure: PExpr::Signal { symbol: signal_name.0 },
+                        hint: signal_name.1.clone()
+                    });
                 }
 
-                let mut ae_signals_right = Vec::new();
+                let mut ae_signals_right: Vec<AExpr> = Vec::new();
                 for signal_name in signals_values_right{
-                    ae_signals_right.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 });
+                    ae_signals_right.push(AExpr{
+                        pure: PExpr::Signal { symbol: signal_name.0 },
+                        hint: signal_name.1.clone()
+                    });
                 }
 
                 (ae_signals_left, ae_signals_right)
@@ -632,7 +642,7 @@ fn execute_statement(
                         &value_right, 
                         &runtime.constants.get_p()
                     );
-                if possible_non_quadratic.is_nonquadratic() {
+                if possible_non_quadratic.pure.is_nonquadratic() {
                     treat_result_with_execution_error(
                         Result::Err(ExecutionError::NonQuadraticConstraint),
                         meta,
@@ -641,8 +651,8 @@ fn execute_statement(
                     )?;
                 }
                 let quadratic_expression = possible_non_quadratic;
-                let constraint_expression = AExpr::transform_expression_to_constraint_form(
-                    quadratic_expression,
+                let constraint_expression = PExpr::transform_expression_to_constraint_form(
+                    quadratic_expression.pure,
                     runtime.constants.get_p(),
                 )
                 .unwrap();
@@ -728,8 +738,8 @@ fn execute_statement(
                     if let LogArgument::LogExp(arg) = arglog{
                         let f_result = execute_expression(arg, program_archive, runtime, flags)?;
                         let arith = safe_unwrap_to_single_arithmetic_expression(f_result, line!());
-                        if AExpr::is_number(&arith){
-                            print!("{}", arith);
+                        if PExpr::is_number(&arith.pure){
+                            print!("{}", arith.pure);
                         }
                         else{
                             print!("Unknown")
@@ -757,7 +767,7 @@ fn execute_statement(
         Assert { arg, meta, .. } => {
             let f_result = execute_expression(arg, program_archive, runtime, flags)?;
             let arith = safe_unwrap_to_single_arithmetic_expression(f_result, line!());
-            let possible_bool = AExpr::get_boolean_equivalence(&arith, runtime.constants.get_p());
+            let possible_bool = PExpr::get_boolean_equivalence(&arith.pure, runtime.constants.get_p());
             let result = match possible_bool {
                 Some(b) if !b => Err(ExecutionError::FalseAssert),
                 Some(b) if b => Ok(None),
@@ -785,8 +795,8 @@ fn execute_statement(
                             &mut runtime.runtime_errors,
                             &runtime.call_trace,
                         )?;
-                        let constraint_expression = AExpr::transform_expression_to_constraint_form(
-                            value_cell,
+                        let constraint_expression = PExpr::transform_expression_to_constraint_form(
+                            value_cell.pure,
                             runtime.constants.get_p(),
                         ).unwrap();
                         if let Option::Some(node) = actual_node {
@@ -954,7 +964,7 @@ fn execute_expression(
     let mut can_be_simplified = true;
     let res = match expr {
         Number(_, value) => {
-            let a_value = AExpr::Number { value: value.clone(), expr: HExpr::Number { value: value.clone() } };
+            let a_value = AExpr { pure: PExpr::Number { value: value.clone() }, hint: HExpr::Number { value: value.clone() } };
             let ae_slice = AExpressionSlice::new(&a_value);
             FoldedValue { arithmetic_slice: Option::Some(ae_slice), ..FoldedValue::default() }
         }
@@ -1072,7 +1082,7 @@ fn execute_expression(
             let f_cond = execute_expression(cond, program_archive, runtime, flags)?;
             let ae_cond = safe_unwrap_to_single_arithmetic_expression(f_cond, line!());
             let possible_bool_cond =
-                AExpr::get_boolean_equivalence(&ae_cond, runtime.constants.get_p());
+                PExpr::get_boolean_equivalence(&ae_cond.pure, runtime.constants.get_p());
             if let Option::Some(bool_cond) = possible_bool_cond {
                 if bool_cond {
                     execute_expression(if_true, program_archive, runtime, flags)?
@@ -1083,24 +1093,32 @@ fn execute_expression(
                 let f_true = execute_expression(if_true, program_archive, runtime, flags)?;
                 let ae_true = safe_unwrap_to_arithmetic_slice(f_true, line!());
                 let exp_true = if ae_true.is_single() {
-                    AExpressionSlice::unwrap_to_single(ae_true).to_hint_expr()
+                    AExpressionSlice::unwrap_to_single(ae_true).hint
                 } else {
                     let (route, values) = ae_true.destruct();
-                    HExpr::MemorySlice { route, values: values.iter().map(|v| v.to_hint_expr()).collect() }
+                    HExpr::MemorySlice { route, values: values.iter().map(|v| v.hint.clone()).collect() }
                 };
                 let f_false = execute_expression(if_false, program_archive, runtime, flags)?;
                 let ae_false = safe_unwrap_to_arithmetic_slice(f_false, line!());
                 let exp_false = if ae_false.is_single() {
-                    AExpressionSlice::unwrap_to_single(ae_false).to_hint_expr()
+                    AExpressionSlice::unwrap_to_single(ae_false).hint
                 } else {
                     let (route, values) = ae_false.destruct();
-                    HExpr::MemorySlice { route, values: values.iter().map(|v| v.to_hint_expr()).collect() }
+                    HExpr::MemorySlice { route, values: values.iter().map(|v| v.hint.clone()).collect() }
                 };
-                let conditional_expression = AExpr::NonQuadratic { expr: HExpr::InlineSwitch {
-                    condition: Box::new(ae_cond.to_hint_expr()),
-                    if_true: Box::new(exp_true),
-                    if_false: Box::new(exp_false),
-                } };
+                // let conditional_expression = PExpr::NonQuadratic { expr: HExpr::InlineSwitch {
+                //     condition: Box::new(ae_cond.hint),
+                //     if_true: Box::new(exp_true),
+                //     if_false: Box::new(exp_false),
+                // } };
+                let conditional_expression = AExpr {
+                    pure: PExpr::NonQuadratic,
+                    hint: HExpr::InlineSwitch {
+                        condition: Box::new(ae_cond.hint),
+                        if_true: Box::new(exp_true),
+                        if_false: Box::new(exp_false),
+                    }
+                };
 
                 let arithmetic_slice = Option::Some(AExpressionSlice::new(&conditional_expression));
                 FoldedValue { arithmetic_slice, ..FoldedValue::default() }
@@ -1129,7 +1147,7 @@ fn execute_expression(
     if let Some(slice) = res_p {
         if slice.is_single() && can_be_simplified{
             let value = AExpressionSlice::unwrap_to_single(slice);
-            Analysis::computed(&mut runtime.analysis, expr_id, value);
+            Analysis::computed(&mut runtime.analysis, expr_id, value.pure);
         }
     }
     Result::Ok(res)
@@ -1155,7 +1173,7 @@ fn execute_call(
         let safe_f_arg = safe_unwrap_to_arithmetic_slice(f_arg, line!());
         if is_template{ // check that all the arguments are known
             for value in MemorySlice::get_reference_values(&safe_f_arg){
-                if !AExpr::is_number(&value){
+                if !PExpr::is_number(&value.pure){
                     treat_result_with_execution_error(
                         Result::Err(ExecutionError::UnknownTemplate),
                         meta,
@@ -1456,37 +1474,40 @@ fn perform_assign(
             r_slice = AExpressionSlice::new_with_route(r_slice.route(), &AExpr::default());
             r_tags = TagWire::default();
         }
-        if accessing_information.undefined {
-            let memory_result =
-                AExpressionSlice::insert_values(symbol_content, &vec![], &r_slice, false);
-            treat_result_with_memory_error_void(
-                memory_result,
-                meta,
-                &mut runtime.runtime_errors,
-                &runtime.call_trace,
-            )?;
-            *symbol_tags = TagInfo::new();
+
+        let memory_result = AExpressionSlice::update_values(
+            symbol_content,
+            &accessing_information.before_signal,
+            &r_slice,
+            false
+        );
+        treat_result_with_memory_error_void(
+            memory_result,
+            meta,
+            &mut runtime.runtime_errors,
+            &runtime.call_trace,
+        )?;
+        // in case it is a complete assignment assign the tags, if not set the tags to empty
+        if (!accessing_information.undefined) && AExpressionSlice::get_number_of_cells(symbol_content) == AExpressionSlice::get_number_of_cells(&r_slice){
+            *symbol_tags = r_tags.tags;
         } else {
-            let memory_result = AExpressionSlice::insert_values(
-                symbol_content,
-                &accessing_information.before_signal,
-                &r_slice,
-                false
-            );
-            treat_result_with_memory_error_void(
-                memory_result,
-                meta,
-                &mut runtime.runtime_errors,
-                &runtime.call_trace,
-            )?;
-            // in case it is a complete assignment assign the tags, if not set the tags to empty
-            if AExpressionSlice::get_number_of_cells(symbol_content) == AExpressionSlice::get_number_of_cells(&r_slice){
-                *symbol_tags = r_tags.tags;
-            } else {
-                *symbol_tags = TagInfo::new();
-            }
+            *symbol_tags = TagInfo::new();
         }
-        Option::None
+
+        // Get left arithmetic slice
+        let mut l_variable_names = Vec::new();
+        unfold_variables(full_symbol, 0, r_slice.route(), &mut l_variable_names);
+        let mut l_expressions = Vec::new();
+        for variable_name in l_variable_names{
+            l_expressions.push(AExpr {
+                pure: PExpr::Signal { symbol: variable_name.0 },
+                hint: variable_name.1.clone(),
+            });
+        }
+        let l_slice = AExpressionSlice::new_array(r_slice.route().to_vec(), l_expressions);
+
+        // We return both the left and right slices
+        Option::Some((l_slice, r_slice))
     } else if ExecutionEnvironment::has_signal(&runtime.environment, symbol){
     let accessing_information = accessing_information.other_access.as_ref().unwrap();
     if accessing_information.signal_access.is_some() {
@@ -1530,7 +1551,7 @@ fn perform_assign(
         }    
         let arithmetic_slice = r_folded.arithmetic_slice.unwrap();
         let value_aux = AExpressionSlice::unwrap_to_single(arithmetic_slice);
-        let value = if let ArithmeticExpressionGen::Number { value, .. } = value_aux {
+        let value = if let PExpr::Number { value, .. } = value_aux.pure {
             value
         } else {
             treat_result_with_execution_error(
@@ -1618,7 +1639,10 @@ fn perform_assign(
         unfold_signals(full_symbol, 0, r_slice.route(), &mut l_signal_names);
         let mut l_expressions = Vec::new();
         for signal_name in l_signal_names{
-            l_expressions.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
+            l_expressions.push(AExpr {
+                pure: PExpr::Signal { symbol: signal_name.0 },
+                hint: signal_name.1.clone(),
+            });
         }
         let l_slice = AExpressionSlice::new_array(r_slice.route().to_vec(), l_expressions);
 
@@ -1802,7 +1826,10 @@ fn perform_assign(
                     unfold_signals(full_symbol, 0, arithmetic_slice.route(), &mut l_signal_names);
                     let mut l_expressions = Vec::new();
                     for signal_name in l_signal_names{
-                        l_expressions.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
+                        l_expressions.push(AExpr {
+                            pure: PExpr::Signal { symbol: signal_name.0 },
+                            hint: signal_name.1.clone(),
+                        });
                     }
                     let l_slice = AExpressionSlice::new_array(arithmetic_slice.route().to_vec(), l_expressions);
 
@@ -1864,7 +1891,7 @@ fn perform_assign(
                             signals_values_right.push(
                                 (
                                     format!("{}{}{}", name_bus.0, string_index, s.clone()),
-                                    HExpr::Symbol { symbol: sumbol_right.clone(), access: access_right.clone() }
+                                    HExpr::Signal { symbol: sumbol_right.clone(), access: access_right.clone() }
                                 )
                             );
 
@@ -1873,7 +1900,7 @@ fn perform_assign(
                             signals_values_left.push(
                                 (
                                     format!("{}{}{}", full_symbol.0, string_index, s.clone()),
-                                    HExpr::Symbol { symbol: symbol_left.clone(), access: access_left.clone() }
+                                    HExpr::Signal { symbol: symbol_left.clone(), access: access_left.clone() }
                                 )
                             );
                         }        
@@ -1883,11 +1910,17 @@ fn perform_assign(
 
                     let mut ae_signals_right = Vec::new();
                     for signal_name in signals_values_right{
-                        ae_signals_right.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 });
+                        ae_signals_right.push(AExpr {
+                            pure: PExpr::Signal { symbol: signal_name.0 },
+                            hint: signal_name.1.clone(),
+                        });
                     }
                     let mut ae_signals_left = Vec::new();
                     for signal_name in signals_values_left{
-                        ae_signals_left.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 });
+                        ae_signals_left.push(AExpr {
+                            pure: PExpr::Signal { symbol: signal_name.0 },
+                            hint: signal_name.1.clone(),
+                        });
                     }
                     
                     let memory_response = 
@@ -2198,7 +2231,10 @@ fn perform_assign(
                 unfold_signals(full_symbol, 0, arithmetic_slice.route(), &mut l_signal_names);
                 let mut l_expressions = Vec::new();
                 for signal_name in l_signal_names{
-                    l_expressions.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
+                    l_expressions.push(AExpr {
+                        pure: PExpr::Signal { symbol: signal_name.0 },
+                        hint: signal_name.1.clone(),
+                    });
                 }
                 let l_slice = AExpressionSlice::new_array(arithmetic_slice.route().to_vec(), l_expressions);
                 Some((l_slice, arithmetic_slice))
@@ -2229,7 +2265,7 @@ fn perform_assign(
                 assert!(accessing_information.field_access.is_some());
                 let arithmetic_slice = r_folded.arithmetic_slice.unwrap();
                 let value_aux = AExpressionSlice::unwrap_to_single(arithmetic_slice);
-                let value = if let ArithmeticExpressionGen::Number { value, .. } = value_aux {
+                let value = if let PExpr::Number { value, .. } = value_aux.pure {
                     value
                 } else {
                     treat_result_with_execution_error(
@@ -2357,7 +2393,7 @@ fn perform_assign(
                         signals_values_right.push(
                             (
                                 format!("{}{}{}", name_bus.0, string_index, s.clone()),
-                                HExpr::Symbol { symbol: sumbol_right.clone(), access: access_right.clone() }
+                                HExpr::Signal { symbol: sumbol_right.clone(), access: access_right.clone() }
                             )
                         );
 
@@ -2366,7 +2402,7 @@ fn perform_assign(
                         signals_values_left.push(
                             (
                                 format!("{}{}{}", full_symbol.0, string_index, s.clone()),
-                                HExpr::Symbol { symbol: symbol_left.clone(), access: access_left.clone() }
+                                HExpr::Signal { symbol: symbol_left.clone(), access: access_left.clone() }
                             )
                         );
                     }        
@@ -2375,11 +2411,17 @@ fn perform_assign(
                 // Transform the signal names into AExpr
                 let mut ae_signals_left = Vec::new();
                 for signal_name in signals_values_left{
-                    ae_signals_left.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
+                    ae_signals_left.push(AExpr {
+                        pure: PExpr::Signal { symbol: signal_name.0 },
+                        hint: signal_name.1.clone(),
+                    });
                 }
                 let mut ae_signals_right = Vec::new();
                 for signal_name in signals_values_right{
-                    ae_signals_right.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
+                    ae_signals_right.push(AExpr {
+                        pure: PExpr::Signal { symbol: signal_name.0 },
+                        hint: signal_name.1.clone(),
+                    });
                 }
 
                 // Update the left slice
@@ -2473,7 +2515,7 @@ fn perform_assign(
                         signals_values_right.push(
                             (
                                 format!("{}{}{}", name_bus.0, string_index, s.clone()),
-                                HExpr::Symbol { symbol: sumbol_right.clone(), access: access_right.clone() }
+                                HExpr::Signal { symbol: sumbol_right.clone(), access: access_right.clone() }
                             )
                         );
 
@@ -2482,7 +2524,7 @@ fn perform_assign(
                         signals_values_left.push(
                             (
                                 format!("{}{}{}", full_symbol.0, string_index, s.clone()),
-                                HExpr::Symbol { symbol: symbol_left.clone(), access: access_left.clone() }
+                                HExpr::Signal { symbol: symbol_left.clone(), access: access_left.clone() }
                             )
                         );
                     }        
@@ -2492,11 +2534,17 @@ fn perform_assign(
 
                 let mut ae_signals_left = Vec::new();
                 for signal_name in signals_values_left{
-                    ae_signals_left.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
+                    ae_signals_left.push(AExpr {
+                        pure: PExpr::Signal { symbol: signal_name.0 },
+                        hint: signal_name.1.clone(),
+                    });
                 }
                 let mut ae_signals_right = Vec::new();
                 for signal_name in signals_values_right{
-                    ae_signals_right.push(AExpr::Signal { symbol: signal_name.0, expr: signal_name.1 } );
+                    ae_signals_right.push(AExpr {
+                        pure: PExpr::Signal { symbol: signal_name.0 },
+                        hint: signal_name.1.clone(),
+                    });
                 }
                 let l_slice = AExpressionSlice::new_array([ae_signals_left.len()].to_vec(), ae_signals_left);
                 let r_slice = AExpressionSlice::new_array([ae_signals_right.len()].to_vec(), ae_signals_right);
@@ -2533,7 +2581,7 @@ fn execute_conditional_statement(
     let f_cond = execute_expression(condition, program_archive, runtime, flags)?;
     let ae_cond = safe_unwrap_to_single_arithmetic_expression(f_cond, line!());
     let possible_cond_bool_value =
-        AExpr::get_boolean_equivalence(&ae_cond, runtime.constants.get_p());
+        PExpr::get_boolean_equivalence(&ae_cond.pure, runtime.constants.get_p());
     if let Some(cond_bool_value) = possible_cond_bool_value {
         let (ret_value, can_simplify) = match false_case {
             Option::Some(else_stmt) if !cond_bool_value => {
@@ -2745,7 +2793,10 @@ fn execute_variable(
     let access_information = treat_accessing(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
         let (_, (symbol, hint_access)) = create_symbol(symbol, &access_information);
-        let ae: ArithmeticExpressionGen<String> = AExpr::NonQuadratic { expr: HExpr::Symbol { symbol, access: hint_access } };
+        let ae = AExpr {
+            pure: PExpr:: NonQuadratic,
+            hint: HExpr::Signal { symbol: symbol, access: hint_access }
+        };
         let arithmetic_slice = Option::Some(AExpressionSlice::new(&ae));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
@@ -2784,7 +2835,10 @@ fn execute_signal(
     let access_information = treat_accessing(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
         let (_, (symbol, hint_access)) = create_symbol(symbol, &access_information);
-        let ae: ArithmeticExpressionGen<String> = AExpr::NonQuadratic { expr: HExpr::Symbol { symbol, access: hint_access } };
+        let ae = AExpr {
+            pure: PExpr:: NonQuadratic,
+            hint: HExpr::Signal { symbol: symbol, access: hint_access }
+        };
         let arithmetic_slice = Option::Some(AExpressionSlice::new(&ae));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
@@ -2812,7 +2866,10 @@ fn execute_signal(
             if let Some(value_tag) = value_tag { // tag has value
                 // access only allowed when (1) it is value defined by user or (2) it is completely assigned
                 if state.value_defined || tag_data.remaining_inserts == 0{
-                    let a_value = AExpr::Number { value: value_tag.clone(), expr: HExpr::Number { value: value_tag.clone() } };
+                    let a_value = AExpr {
+                        pure: PExpr::Number { value: value_tag.clone() },
+                        hint: HExpr::Number { value: value_tag.clone() }
+                    };
                     let ae_slice = AExpressionSlice::new(&a_value);
                     Result::Ok(FoldedValue { arithmetic_slice: Option::Some(ae_slice), ..FoldedValue::default() })
                 } else{
@@ -2885,7 +2942,10 @@ fn signal_to_arith(symbol: (String, (String, Vec<HintAccess>)), slice: SignalSli
 
             }
         }
-        expressions.push(AExpr::Signal { symbol: symbols[index].0.clone(), expr: symbols[index].1.clone() } );
+        expressions.push(AExpr {
+            pure: PExpr::Signal { symbol: symbols[index].0.clone() },
+            hint: symbols[index].1.clone(),
+        });
         index += 1;
     }
     if index == symbols.len() {
@@ -2898,13 +2958,26 @@ fn signal_to_arith(symbol: (String, (String, Vec<HintAccess>)), slice: SignalSli
 
 fn unfold_signals(current: (String, (String, Vec<HintAccess>)), dim: usize, lengths: &[usize], result: &mut Vec<(String, HintExpression)>) {
     if dim == lengths.len() {
-        result.push((current.0, HintExpression::Symbol { symbol: current.1.0, access: current.1.1 }));
+        result.push((current.0, HintExpression::Signal { symbol: current.1.0, access: current.1.1 }));
     } else {
         let (symbol, access) = current.1;
         for i in 0..lengths[dim] {
             let mut access = access.clone();
             access.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(i) }));
             unfold_signals((format!("{}[{}]", current.0, i), (symbol.clone(), access)), dim + 1, lengths, result)
+        }
+    }
+}
+
+pub fn unfold_variables(current: (String, (String, Vec<HintAccess>)), dim: usize, lengths: &[usize], result: &mut Vec<(String, HintExpression)>) {
+    if dim == lengths.len() {
+        result.push((current.0, HintExpression::Variable { symbol: current.1.0, access: current.1.1 }));
+    } else {
+        let (symbol, access) = current.1;
+        for i in 0..lengths[dim] {
+            let mut access = access.clone();
+            access.push(HintAccess::ArrayAccess(HExpr::Number { value: BigInt::from(i) }));
+            unfold_variables((format!("{}[{}]", current.0, i), (symbol.clone(), access)), dim + 1, lengths, result)
         }
     }
 }
@@ -2926,7 +2999,10 @@ fn execute_bus(
 
     if access_information.undefined {
         let (_, (symbol, hint_access)) = create_symbol_bus(symbol, &access_information);
-        let ae: ArithmeticExpressionGen<String> = AExpr::NonQuadratic { expr: HExpr::Symbol { symbol, access: hint_access } };
+        let ae = AExpr {
+            pure: PExpr:: NonQuadratic,
+            hint: HExpr::Signal { symbol: symbol, access: hint_access }
+        };
         let arithmetic_slice = Option::Some(AExpressionSlice::new(&ae));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
@@ -2997,7 +3073,10 @@ fn execute_bus(
         if let Some(value_tag) = value_tag { // tag has value
             // access only allowed when (1) it is value defined by user or (2) it is completely assigned
             if state.value_defined || is_complete{
-                let a_value = AExpr::Number { value: value_tag.clone(), expr: HExpr::Number { value: value_tag.clone() } };
+                let a_value = AExpr {
+                    pure: PExpr::Number { value: value_tag.clone() },
+                    hint: HExpr::Number { value: value_tag.clone() }
+                };
                 let ae_slice = AExpressionSlice::new(&a_value);
                 Result::Ok(FoldedValue { arithmetic_slice: Option::Some(ae_slice), ..FoldedValue::default() })
             } else{
@@ -3112,7 +3191,10 @@ fn execute_component(
     let access_information = treat_accessing_bus(meta, access, program_archive, runtime, flags)?;
     if access_information.undefined {
         let (_, (symbol, hint_access)) = create_symbol_bus(symbol, &access_information);
-        let ae: ArithmeticExpressionGen<String> = AExpr::NonQuadratic { expr: HExpr::Symbol { symbol, access: hint_access } };
+        let ae = AExpr {
+            pure: PExpr:: NonQuadratic,
+            hint: HExpr::Signal { symbol: symbol, access: hint_access }
+        };
         let arithmetic_slice = Option::Some(AExpressionSlice::new(&ae));
         return Result::Ok(FoldedValue { arithmetic_slice, ..FoldedValue::default() });
     }
@@ -3150,7 +3232,10 @@ fn execute_component(
                 &mut runtime.runtime_errors,
                 &runtime.call_trace,
             )?;
-            let a_value = AExpr::Number { value: result.clone(), expr: HExpr::Number { value: result.clone() } };
+            let a_value = AExpr {
+                pure: PExpr::Number { value: result.clone() },
+                hint: HExpr::Number { value: result.clone() }
+            };
             let ae_slice = AExpressionSlice::new(&a_value);
             Result::Ok(FoldedValue { arithmetic_slice: Option::Some(ae_slice), ..FoldedValue::default() })
 
@@ -3652,7 +3737,7 @@ fn treat_indexing(
 */
 fn valid_indexing(ae_indexes: &[AExpr]) -> Result<(), MemoryError> {
     for ae_index in ae_indexes {
-        if ae_index.is_number() && AExpr::get_usize(ae_index).is_none() {
+        if ae_index.pure.is_number() && PExpr::get_usize(&ae_index.pure).is_none() {
             return Result::Err(MemoryError::OutOfBoundsError);
         }
     }
@@ -3661,7 +3746,7 @@ fn valid_indexing(ae_indexes: &[AExpr]) -> Result<(), MemoryError> {
 
 fn valid_array_declaration(ae_indexes: &[AExpr]) -> Result<(), MemoryError> {
     for ae_index in ae_indexes {
-        if !ae_index.is_number() {
+        if !ae_index.pure.is_number() {
             return Result::Err(MemoryError::UnknownSizeDimension);
         }
     }
@@ -3677,10 +3762,10 @@ fn valid_array_declaration(ae_indexes: &[AExpr]) -> Result<(), MemoryError> {
 fn cast_indexing(ae_indexes: &[AExpr]) -> Option<Vec<SliceCapacity>> {
     let mut sc_indexes = Vec::new();
     for ae_index in ae_indexes.iter() {
-        if !ae_index.is_number() {
+        if !ae_index.pure.is_number() {
             return Option::None;
         }
-        match AExpr::get_usize(ae_index) {
+        match PExpr::get_usize(&ae_index.pure) {
             Some(index) => { sc_indexes.push(index); },
             None => { return Option::None; },
         }
@@ -3689,10 +3774,10 @@ fn cast_indexing(ae_indexes: &[AExpr]) -> Option<Vec<SliceCapacity>> {
 }
 
 fn cast_index(ae_index: &AExpr) -> Option<SliceCapacity> {
-    if !ae_index.is_number() {
+    if !ae_index.pure.is_number() {
         return Option::None;
     }
-    match AExpr::get_usize(ae_index) {
+    match PExpr::get_usize(&ae_index.pure) {
         Option::Some(index) => { Option::Some(index) },
         Option::None => {  Option::None },
     }
@@ -3740,7 +3825,7 @@ fn treat_accessing(
             Access::ArrayAccess(index) =>{
                 let f_index = execute_expression(index, program_archive, runtime, flags)?;
                 let ae_index = safe_unwrap_to_single_arithmetic_expression(f_index, line!());
-                hint_access.push(HintAccess::ArrayAccess(ae_index.to_hint_expr()));
+                hint_access.push(HintAccess::ArrayAccess(ae_index.hint));
             },
             Access::ComponentAccess(field) =>{
                 hint_access.push(HintAccess::ComponentAccess(field.clone()));
@@ -3807,7 +3892,7 @@ fn treat_accessing_bus(
                 Access::ArrayAccess(index) =>{
                     let f_index = execute_expression(index, program_archive, runtime, flags)?;
                     let ae_index = safe_unwrap_to_single_arithmetic_expression(f_index, line!());
-                    hint_access.push(HintAccess::ArrayAccess(ae_index.to_hint_expr()));
+                    hint_access.push(HintAccess::ArrayAccess(ae_index.hint));
                 },
                 Access::ComponentAccess(field) =>{
                     hint_access.push(HintAccess::ComponentAccess(field.clone()));

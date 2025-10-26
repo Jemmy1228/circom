@@ -80,6 +80,48 @@ impl<C: Default + Clone + Display + Eq> Display for MemorySlice<C> {
     }
 }
 
+pub trait Update {
+    fn update(&mut self, new_value: &Self);
+}
+
+impl<C:Clone + Update> MemorySlice<C> {
+    pub fn update_values(
+        memory_slice: &mut MemorySlice<C>,
+        access: &[SliceCapacity],
+        new_values: &MemorySlice<C>,
+        is_strict: bool,
+    ) -> Result<(), MemoryError> {
+        match MemorySlice::check_correct_dims(memory_slice, access, new_values, is_strict) {
+            Result::Ok(_) => {
+                let mut cell = MemorySlice::get_initial_cell(memory_slice, access)?;
+
+                for value in new_values.values.iter() {
+                    memory_slice.values[cell].update(value);
+                    cell += 1;
+                }
+                Result::Ok(())
+            }
+            Result::Err(MemoryError::MismatchedDimensionsWeak(dim_1, dim_2)) => {
+                let mut cell = MemorySlice::get_initial_cell(memory_slice, access)?;
+                
+                // We assign the min between the number of cells in the new values and the memory slice
+                let number_inserts = std::cmp::min(
+                    MemorySlice::get_number_of_cells(new_values),
+                    MemorySlice::get_number_of_cells(memory_slice)
+                );
+
+                for i in 0..number_inserts{
+                    memory_slice.values[cell] = new_values.values[i].clone();
+                    cell += 1;
+                }
+
+                Result::Err(MemoryError::MismatchedDimensionsWeak(dim_1, dim_2))
+            }
+            Result::Err(error) => return Err(error),
+        }
+    }
+}
+
 impl<C: Clone> MemorySlice<C> {
     // Raw manipulations of the slice
     fn get_initial_cell(

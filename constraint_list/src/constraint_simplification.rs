@@ -141,16 +141,16 @@ fn eq_cluster_simplification(
         } else if HashSet::contains(forbidden, &s_0) {
             LinkedList::push_back(
                 &mut substitutions,
-                S::new(s_1, A::Signal { symbol: s_0, expr: Unknown }).unwrap(),
+                S::new(s_1, A::Signal { symbol: s_0 }).unwrap(),
             );
         } else if HashSet::contains(forbidden, &s_1) {
             LinkedList::push_back(
                 &mut substitutions,
-                S::new(s_0, A::Signal { symbol: s_1, expr: Unknown }).unwrap(),
+                S::new(s_0, A::Signal { symbol: s_1 }).unwrap(),
             );
         } else {
             let (l, r) = if s_0 > s_1 { (s_0, s_1) } else { (s_1, s_0) };
-            LinkedList::push_back(&mut substitutions, S::new(l, A::Signal { symbol: r, expr: Unknown }).unwrap());
+            LinkedList::push_back(&mut substitutions, S::new(l, A::Signal { symbol: r }).unwrap());
         }
         (substitutions, constraints)
     } else {
@@ -180,15 +180,15 @@ fn eq_cluster_simplification(
         };
 
         for signal in remains {
-            let l = A::Signal { symbol: signal, expr: Unknown };
-            let r = A::Signal { symbol: rh_signal, expr: Unknown };
+            let l = A::Signal { symbol: signal };
+            let r = A::Signal { symbol: rh_signal };
             let expr = A::sub(&l, &r, field);
             let c = A::transform_expression_to_constraint_form(expr, field).unwrap();
             LinkedList::push_back(&mut cons, c);
         }
 
         for signal in remove {
-            let sub = S::new(signal, A::Signal { symbol: rh_signal, expr: Unknown }).unwrap();
+            let sub = S::new(signal, A::Signal { symbol: rh_signal }).unwrap();
             LinkedList::push_back(&mut subs, sub);
         }
 
