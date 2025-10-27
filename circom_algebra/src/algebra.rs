@@ -3,7 +3,7 @@ pub use super::modular_arithmetic::ArithmeticError;
 use num_bigint::BigInt;
 use num_traits::{Num, ToPrimitive, Zero};
 use program_structure::ast::{ExpressionInfixOpcode, ExpressionPrefixOpcode};
-use program_structure::memory_slice::Update;
+use program_structure::memory_slice::{MemorySlice, Update};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::hash::Hash;
@@ -39,6 +39,10 @@ pub enum HintExpression {
         symbol: String,
         access: Vec<HintAccess>,
     },
+    Intermediate {
+        symbol: String,
+        access: Vec<HintAccess>,
+    },
     Variable {
         symbol: String,
         access: Vec<HintAccess>,
@@ -61,6 +65,10 @@ pub enum HintExpression {
         if_true: Box<HintExpression>,
         if_false: Box<HintExpression>,
     },
+    Call {
+        function_name: String,
+        arguments: Vec<HintExpression>,
+    },
 }
 
 impl HintExpression {
@@ -73,6 +81,14 @@ impl HintExpression {
             }
             Number { value } => {
                 format!("{{\"$\": \"Expr\", \"@\": \"Number\", \"value\": \"{}\"}}", value.to_str_radix(10))
+            }
+            Intermediate { symbol, access } => {
+                format!("{{\"$\": \"Expr\", \"@\": \"Intermediate\", \"symbol\": \"{}\", \"access\": [{}]}}", symbol,
+                    access.iter()
+                    .map(|acc| acc.to_json())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+                )
             }
             Signal { symbol, access } => {
                 format!("{{\"$\": \"Expr\", \"@\": \"Signal\", \"symbol\": \"{}\", \"access\": [{}]}}", symbol,
@@ -126,6 +142,17 @@ impl HintExpression {
                     condition.to_json(),
                     if_true.to_json(),
                     if_false.to_json(),
+                )
+            }
+            Call { function_name, arguments } => {
+                let args_json = arguments.iter()
+                    .map(|arg| arg.to_json())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                format!(
+                    "{{\"$\": \"Expr\", \"@\": \"Call\", \"function_name\": \"{}\", \"arguments\": [{}]}}",
+                    function_name,
+                    args_json
                 )
             }
         }
@@ -512,8 +539,12 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> Default for ArithmeticExpre
 }
 
 impl<C: Default + Clone + Display + Hash + Eq + Ord> Update for ArithmeticExpression<C> {
-    fn update(&mut self, other: &Self) {
+    fn update_pure(&mut self, other: &Self) {
         self.pure = other.pure.clone();
+    }
+
+    fn update_hint(&mut self, other: &Self) {
+        self.hint = other.hint.clone();
     }
 }
 
@@ -521,6 +552,14 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C>
 {
     pub fn new() -> Self {
         ArithmeticExpression::default()
+    }
+
+    pub fn slice_to_json(slice: MemorySlice<ArithmeticExpression<C>>) -> String {
+        if slice.is_single() {
+            MemorySlice::unwrap_to_single(slice.clone()).hint.to_json()
+        } else {
+            unimplemented!();
+        }
     }
 }
 

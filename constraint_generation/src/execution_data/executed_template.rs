@@ -1,11 +1,13 @@
 use super::executed_bus::BusConnexion;
 use super::type_definitions::*;
 use super::ExecutedBus;
+use circom_algebra::algebra::HintExpression;
 use circom_algebra::algebra::{ArithmeticExpression, PureArithmeticExpression};
 use compiler::hir::very_concrete_program::*;
 use dag::DAG;
 use num_bigint::BigInt;
 use program_structure::ast::{SignalType, Statement};
+use program_structure::memory_slice::MemorySlice;
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
@@ -89,7 +91,7 @@ pub struct ExecutedTemplate {
     pub bus_connexions: HashMap<String, BusConnexion>,
     pub is_extern_c: bool,
     json_writer: Option<Box<dyn Write>>,
-    json_first_statement: bool,
+    json_first_statement: Vec<bool>,
 }
 
 impl ExecutedTemplate {
@@ -132,7 +134,7 @@ impl ExecutedTemplate {
             underscored_signals: Vec::new(),
             is_extern_c,
             json_writer: std::mem::take(json_writer),
-            json_first_statement: true,
+            json_first_statement: vec![true],
         }
     }
 
@@ -224,15 +226,16 @@ impl ExecutedTemplate {
         self.constraints.push(constraint);
     }
 
-    pub fn add_instr_assign(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
+    pub fn instr_assign_signal(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
         if let Some(writer) = &mut self.json_writer {
-            if self.json_first_statement {
-                self.json_first_statement = false;
+            if *self.json_first_statement.last().unwrap() {
+                self.json_first_statement.pop();
+                self.json_first_statement.push(false);
             } else {
                 writeln!(writer, ",").unwrap();
             }
             write!(writer,
-                "{{\"$\": \"Stmt\", \"@\": \"Assign\", \"symbol\": \"{}\", \"sym_expr\": {}, \"value\": {}, \"expr\": {}}}",
+                "{{\"$\": \"Stmt\", \"@\": \"AssignSignal\", \"symbol\": \"{}\", \"sym_expr\": {}, \"value\": {}, \"expr\": {}}}",
                 symbol.pure.to_string(),
                 symbol.hint.to_json(),
                 expr.pure.to_json(),
@@ -241,10 +244,11 @@ impl ExecutedTemplate {
         }
     }
 
-    pub fn add_instr_hint(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
+    pub fn instr_hint(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
         if let Some(writer) = &mut self.json_writer {
-            if self.json_first_statement {
-                self.json_first_statement = false;
+            if *self.json_first_statement.last().unwrap() {
+                self.json_first_statement.pop();
+                self.json_first_statement.push(false);
             } else {
                 writeln!(writer, ",").unwrap();
             }
@@ -257,10 +261,11 @@ impl ExecutedTemplate {
         }
     }
 
-    pub fn add_instr_constraint(&mut self, left: &ArithmeticExpression<String>, right: &ArithmeticExpression<String>) {
+    pub fn instr_constraint(&mut self, left: &ArithmeticExpression<String>, right: &ArithmeticExpression<String>) {
         if let Some(writer) = &mut self.json_writer {
-            if self.json_first_statement {
-                self.json_first_statement = false;
+            if *self.json_first_statement.last().unwrap() {
+                self.json_first_statement.pop();
+                self.json_first_statement.push(false);
             } else {
                 writeln!(writer, ",").unwrap();
             }
@@ -275,10 +280,11 @@ impl ExecutedTemplate {
         }
     }
 
-    pub fn add_instr_var(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
+    pub fn instr_var(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
         if let Some(writer) = &mut self.json_writer {
-            if self.json_first_statement {
-                self.json_first_statement = false;
+            if *self.json_first_statement.last().unwrap() {
+                self.json_first_statement.pop();
+                self.json_first_statement.push(false);
             } else {
                 writeln!(writer, ",").unwrap();
             }
@@ -287,6 +293,70 @@ impl ExecutedTemplate {
                 symbol.pure.to_string(),
                 symbol.hint.to_json(),
                 expr.hint.to_json(),
+            ).unwrap();
+        }
+    }
+
+    pub fn instr_intermediate(&mut self, intermediate_id:&String, value: &HintExpression) {
+        if let Some(writer) = &mut self.json_writer {
+            if *self.json_first_statement.last().unwrap() {
+                self.json_first_statement.pop();
+                self.json_first_statement.push(false);
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer,
+                "{{\"$\": \"Stmt\", \"@\": \"AssignIntermediate\", \"intermediate\": \"{}\", \"expr\": {}}}",
+                intermediate_id,
+                value.to_json(),
+            ).unwrap();
+        }
+    }
+
+    pub fn instr_if(&mut self, condition: &HintExpression) {
+        if let Some(writer) = &mut self.json_writer {
+            if *self.json_first_statement.last().unwrap() {
+                self.json_first_statement.pop();
+                self.json_first_statement.push(false);
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            writeln!(writer,
+                "{{\"$\": \"Stmt\", \"@\": \"If\", \"condition\": {},\n\"if_branch\": [",
+                condition.to_json(),
+            ).unwrap();
+            self.json_first_statement.push(true);
+        }
+    }
+
+    pub fn instr_else(&mut self) {
+        if let Some(writer) = &mut self.json_writer {
+            self.json_first_statement.pop();
+            writeln!(writer).unwrap();
+            writeln!(writer,"], \"else_branch\": [").unwrap();
+            self.json_first_statement.push(true);
+        }
+    }
+
+    pub fn instr_end_if(&mut self) {
+        if let Some(writer) = &mut self.json_writer {
+            self.json_first_statement.pop();
+            writeln!(writer).unwrap();
+            write!(writer,"]}}").unwrap();
+        }
+    }
+
+    pub fn instr_block(&mut self, enter:bool) {
+        if let Some(writer) = &mut self.json_writer {
+            if *self.json_first_statement.last().unwrap() {
+                self.json_first_statement.pop();
+                self.json_first_statement.push(false);
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer,
+                "{{\"$\": \"Stmt\", \"@\": \"Block\", \"enter\": {}}}",
+                enter,
             ).unwrap();
         }
     }
