@@ -246,7 +246,7 @@ impl ExecutedTemplate {
         }
     }
 
-    pub fn instr_hint(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
+    pub fn instr_hint_signal(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
         if let Some(writer) = &mut self.json_writer {
             if *self.json_first_statement.last().unwrap() {
                 self.json_first_statement.pop();
@@ -268,7 +268,7 @@ impl ExecutedTemplate {
         }
     }
 
-    pub fn instr_constraint(&mut self, left: &ArithmeticExpression<String>, right: &ArithmeticExpression<String>) {
+    pub fn instr_constrain_equal(&mut self, left: &ArithmeticExpression<String>, right: &ArithmeticExpression<String>) {
         if let Some(writer) = &mut self.json_writer {
             if *self.json_first_statement.last().unwrap() {
                 self.json_first_statement.pop();
@@ -287,7 +287,7 @@ impl ExecutedTemplate {
         }
     }
 
-    pub fn instr_var(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
+    pub fn instr_assign_var(&mut self, symbol: &ArithmeticExpression<String>, expr: &ArithmeticExpression<String>) {
         if let Some(writer) = &mut self.json_writer {
             if *self.json_first_statement.last().unwrap() {
                 self.json_first_statement.pop();
@@ -301,6 +301,19 @@ impl ExecutedTemplate {
                 symbol.hint.to_json(),
                 expr.hint.to_json(),
             ).unwrap();
+        }
+    }
+
+    pub fn instr_var_declaration(&mut self, var_name:&String, dimensions: &[usize]) {
+        if let Some(writer) = &mut self.json_writer {
+            if *self.json_first_statement.last().unwrap() {
+                self.json_first_statement.pop();
+                self.json_first_statement.push(false);
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer,
+                "{{\"$\": \"Stmt\", \"@\": \"VarDeclaration\", \"symbol\": \"{}\", \"dimensions\": {:?}}}", var_name, dimensions).unwrap();
         }
     }
 

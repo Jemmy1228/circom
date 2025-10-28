@@ -332,11 +332,16 @@ fn execute_statement(
                                 actual_node,
                             )
                         },
-                        VariableType::Var => environment_shortcut_add_variable(
-                            &mut runtime.environment,
-                            name,
-                            &usable_dimensions,
-                        ),
+                        VariableType::Var => {
+                            if let Option::Some(actual_node) = actual_node {
+                                actual_node.instr_var_declaration(name, &usable_dimensions);
+                            }
+                            environment_shortcut_add_variable(
+                                &mut runtime.environment,
+                                name,
+                                &usable_dimensions,
+                            )
+                        },
                         VariableType::Signal(signal_type, tag_list) => {
                             if runtime.block_type == BlockType::Unknown{
                                 // Case not valid constraint Known/Unknown
@@ -475,7 +480,7 @@ fn execute_statement(
                             }
                         } else if let AssignOp::AssignSignal = op {// needs fix, check case arrays
                             //debug_assert!(possible_constraint.is_some());
-                            node.instr_hint(&signal_left, &value_right);
+                            node.instr_hint_signal(&signal_left, &value_right);
                             let signal_name = match signal_left.pure{
                                 PExpr::Signal { symbol, .. } =>{
                                     symbol
@@ -487,7 +492,7 @@ fn execute_statement(
                                 needs_double_arrow.push(signal_name);
                             }
                         } else if AssignOp::AssignVar == *op{
-                            node.instr_var(&signal_left, &value_right);
+                            node.instr_assign_var(&signal_left, &value_right);
                         } else {
                             unreachable!()
                         }
@@ -665,7 +670,7 @@ fn execute_statement(
             for i in 0..arith_left.len(){
                 let value_left = &arith_left[i];
                 let value_right = &arith_right[i];
-                actual_node.as_mut().unwrap().instr_constraint(&value_left, &value_right);
+                actual_node.as_mut().unwrap().instr_constrain_equal(&value_left, &value_right);
                 let possible_non_quadratic =
                     AExpr::sub(
                         &value_left, 

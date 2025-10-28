@@ -138,7 +138,7 @@ impl HintExpression {
             }
             InlineSwitch { condition, if_true, if_false } => {
                 format!(
-                    "{{\"$\": \"Expr\", \"@\": \"InlineSwitch\", \"condition\": {}, \"if_true\": {}, \"if_false\": {}}}",
+                    "{{\"$\": \"Expr\", \"@\": \"InlineSwitch\", \"condition\": {}, \"true_case\": {}, \"false_case\": {}}}",
                     condition.to_json(),
                     if_true.to_json(),
                     if_false.to_json(),
