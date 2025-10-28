@@ -92,6 +92,7 @@ pub struct ExecutedTemplate {
     pub is_extern_c: bool,
     json_writer: Option<Box<dyn Write>>,
     json_first_statement: Vec<bool>,
+    hints: HashSet<String>,
 }
 
 impl ExecutedTemplate {
@@ -135,6 +136,7 @@ impl ExecutedTemplate {
             is_extern_c,
             json_writer: std::mem::take(json_writer),
             json_first_statement: vec![true],
+            hints: HashSet::new(),
         }
     }
 
@@ -252,8 +254,13 @@ impl ExecutedTemplate {
             } else {
                 writeln!(writer, ",").unwrap();
             }
+            let signal = match &symbol.pure {
+                PureArithmeticExpression::Signal { symbol }=> symbol.clone(),
+                _ => panic!("Expected a signal in instr_hint"),
+            };
+            self.hints.insert(signal);
             write!(writer,
-                "{{\"$\": \"Stmt\", \"@\": \"Hint\", \"symbol\": \"{}\", \"sym_expr\": {}, \"expr\": {}}}",
+                "{{\"$\": \"Stmt\", \"@\": \"HintSignal\", \"symbol\": \"{}\", \"sym_expr\": {}, \"expr\": {}}}",
                 symbol.pure.to_string(),
                 symbol.hint.to_json(),
                 expr.hint.to_json(),
@@ -313,39 +320,6 @@ impl ExecutedTemplate {
         }
     }
 
-    pub fn instr_if(&mut self, condition: &HintExpression) {
-        if let Some(writer) = &mut self.json_writer {
-            if *self.json_first_statement.last().unwrap() {
-                self.json_first_statement.pop();
-                self.json_first_statement.push(false);
-            } else {
-                writeln!(writer, ",").unwrap();
-            }
-            writeln!(writer,
-                "{{\"$\": \"Stmt\", \"@\": \"If\", \"condition\": {},\n\"if_branch\": [",
-                condition.to_json(),
-            ).unwrap();
-            self.json_first_statement.push(true);
-        }
-    }
-
-    pub fn instr_else(&mut self) {
-        if let Some(writer) = &mut self.json_writer {
-            self.json_first_statement.pop();
-            writeln!(writer).unwrap();
-            writeln!(writer,"], \"else_branch\": [").unwrap();
-            self.json_first_statement.push(true);
-        }
-    }
-
-    pub fn instr_end_if(&mut self) {
-        if let Some(writer) = &mut self.json_writer {
-            self.json_first_statement.pop();
-            writeln!(writer).unwrap();
-            write!(writer,"]}}").unwrap();
-        }
-    }
-
     pub fn instr_block(&mut self, enter:bool) {
         if let Some(writer) = &mut self.json_writer {
             if *self.json_first_statement.last().unwrap() {
@@ -396,22 +370,24 @@ impl ExecutedTemplate {
     pub fn export_json_before(&mut self) {
         if let Some(writer) = &mut self.json_writer {
             writeln!(writer, "{{").unwrap();
-            writeln!(writer, "\"template\": \"{}\",", self.template_name).unwrap();
+            writeln!(writer, "\"id\": \"{}\",", self.template_name).unwrap();
 
-            write!(writer, "\"parameters\": [").unwrap();
+            write!(writer, "\"parameters\": {{").unwrap();
             {
                 let mut first = true;
-                for (_, data) in self.parameter_instances.clone() {
-                    let (_, values) = data.destruct();
-                    for value in as_big_int(values) {
-                        if !first {
-                            write!(writer, ", ").unwrap();
-                        }
-                        write!(writer, "{}", value).unwrap();
+                for (name, value) in self.parameter_instances.clone() {
+                    if first {
                         first = false;
+                        writeln!(writer).unwrap();
+                    } else {
+                        writeln!(writer, ",").unwrap();
                     }
+                    write!(writer, "\"{}\": {}", name, value.to_string()).unwrap();
                 }
-                writeln!(writer, "],").unwrap();
+                if !first {
+                    writeln!(writer).unwrap();
+                }
+                writeln!(writer, "}},").unwrap();
             }
 
             writeln!(writer, "\"is_parallel\" : {},", self.is_parallel).unwrap();
@@ -423,7 +399,8 @@ impl ExecutedTemplate {
     pub fn export_json_after(&mut self, templates_info: &Vec<ExecutedTemplate>, buses_info : &Vec<ExecutedBus>) {
 
         let mut signals = BTreeMap::new();
-        self.insert_wires(&mut signals, buses_info);
+        self.insert_wires(&mut signals, &self.hints, buses_info);
+        self.hints = HashSet::new(); // free memory
 
         if let Some(writer) = &mut self.json_writer {
             writeln!(writer).unwrap();
@@ -436,6 +413,15 @@ impl ExecutedTemplate {
                     if !first {
                         writeln!(writer, ",").unwrap();
                     }
+                    let xtype = match *xtype {
+                        1 => "input_public",
+                        2 => "input",
+                        3 => "derived",
+                        4 => "hint",
+                        5 => "output",
+                        6 => "output_hint",
+                        _ => unreachable!(),
+                    };
                     write!(writer, "\"{}\": \"{}\"", name, xtype).unwrap();
                     first = false;
                 }
@@ -491,45 +477,45 @@ impl ExecutedTemplate {
         self.build_constraints(dag);
     }
 
-    fn insert_wires(&self, result: &mut BTreeMap<String, char>, buses_info : &Vec<ExecutedBus>) {
+    fn insert_wires(&self, result: &mut BTreeMap<String, u8>, hints: &HashSet<String>, buses_info : &Vec<ExecutedBus>) {
         for wire_data in self.outputs() {
             let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
-            let config = SignalConfig { signal_type: 1, dimensions: &wire_data.length, is_public: false };
+            let config = SignalConfig { signal_type: 5, dimensions: &wire_data.length, is_public: false };
             if wire_data.is_bus{
-                insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                insert_bus_symbols(result, hints, state, &config, &self.bus_connexions, buses_info );
             } else{
-                insert_symbols(result, state, &config);
+                insert_symbols(result, hints, state, &config);
             }
         }
         for wire_data in self.inputs() {
             if self.public_inputs.contains(&wire_data.name) {
                 let state = State { basic_name: wire_data.name.clone(),  name: wire_data.name.clone(), dim: 0 };
-                let config = SignalConfig { signal_type: 0, dimensions: &wire_data.length, is_public: true };
+                let config = SignalConfig { signal_type: 1, dimensions: &wire_data.length, is_public: true };
                 if wire_data.is_bus{
-                    insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                    insert_bus_symbols(result, hints, state, &config, &self.bus_connexions, buses_info );
                 } else{
-                    insert_symbols(result, state, &config);
+                    insert_symbols(result, hints, state, &config);
                 }
             }
         }
         for wire_data in self.inputs() {
             if !self.public_inputs.contains(&wire_data.name) {
                 let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
-                let config = SignalConfig { signal_type: 0, dimensions: &wire_data.length, is_public: false };
+                let config = SignalConfig { signal_type: 2, dimensions: &wire_data.length, is_public: false };
                 if wire_data.is_bus{
-                    insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                    insert_bus_symbols(result, hints, state, &config, &self.bus_connexions, buses_info );
                 } else{
-                    insert_symbols(result, state, &config);
+                    insert_symbols(result, hints, state, &config);
                 }
             }
         }
         for wire_data in self.intermediates() {
             let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
-            let config = SignalConfig { signal_type: 2, dimensions: &wire_data.length, is_public: false };
+            let config = SignalConfig { signal_type: 3, dimensions: &wire_data.length, is_public: false };
             if wire_data.is_bus{
-                insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                insert_bus_symbols(result, hints, state, &config, &self.bus_connexions, buses_info );
             } else{
-                insert_symbols(result, state, &config);
+                insert_symbols(result, hints, state, &config);
             }
         }
     }
@@ -835,26 +821,40 @@ struct State {
     name: String, //Full name with array accesses.
     dim: usize,
 }
-fn insert_symbols(result: &mut BTreeMap<String, char>, state: State, config: &SignalConfig) {
+fn insert_symbols(result: &mut BTreeMap<String, u8>, hints: &HashSet<String>, state: State, config: &SignalConfig) {
     if state.dim == config.dimensions.len() {
-        if config.signal_type == 0 {
-            result.insert(state.name, if config.is_public { 'p' } else { 'i' });
-        } else if config.signal_type == 1 {
-            result.insert(state.name, 'o');
-        } else if config.signal_type == 2 {
-            result.insert(state.name, 't');
+        match (config.signal_type, hints.contains(&state.name)) {
+            (1, false) => { // Input public
+                result.insert(state.name, 1);
+            }
+            (2, false) => { // Input private
+                result.insert(state.name, 2);
+            }
+            (3, false) => { // derived
+                result.insert(state.name, 3);
+            }
+            (3, true) => { // derived
+                result.insert(state.name, 4);
+            }
+            (5, false) => {
+                result.insert(state.name, 5);
+            }
+            (5, true) => {
+                result.insert(state.name, 6);
+            }
+            _ => unreachable!(),
         }
     } else {
         let mut index = 0;
         while index < config.dimensions[state.dim] {
             let new_state =
                 State { basic_name: state.basic_name.clone(), name: format!("{}[{}]", state.name, index), dim: state.dim + 1 };
-            insert_symbols(result, new_state, config);
+            insert_symbols(result, hints, new_state, config);
             index += 1;
         }
     }
 }
-fn insert_bus_symbols(result: &mut BTreeMap<String, char>, state: State, config: &SignalConfig, bus_connexions: &HashMap<String, BusConnexion>, buses: &Vec<ExecutedBus>) {
+fn insert_bus_symbols(result: &mut BTreeMap<String, u8>, hints: &HashSet<String>, state: State, config: &SignalConfig, bus_connexions: &HashMap<String, BusConnexion>, buses: &Vec<ExecutedBus>) {
     let bus_connection = bus_connexions.get(&state.basic_name).unwrap();
     let ex_bus2 = buses.get(bus_connection.inspect.goes_to).unwrap();
     if state.dim == config.dimensions.len() {
@@ -863,9 +863,9 @@ fn insert_bus_symbols(result: &mut BTreeMap<String, char>, state: State, config:
             let state = State { basic_name: info_field.name.clone(), name: signal_name, dim: 0 };
             let config = SignalConfig { signal_type: config.signal_type, dimensions: &info_field.length, is_public: config.is_public };
             if info_field.is_bus{
-                insert_bus_symbols(result, state, &config, ex_bus2.bus_connexions(), buses);
+                insert_bus_symbols(result, hints, state, &config, ex_bus2.bus_connexions(), buses);
             } else{
-                insert_symbols(result, state, &config);
+                insert_symbols(result, hints, state, &config);
             }
         }
 
@@ -874,7 +874,7 @@ fn insert_bus_symbols(result: &mut BTreeMap<String, char>, state: State, config:
         while index < config.dimensions[state.dim] {
             let new_state =
                 State { basic_name: state.basic_name.clone(), name: format!("{}[{}]", state.name, index), dim: state.dim + 1 };
-            insert_bus_symbols(result, new_state, config, bus_connexions, buses);
+            insert_bus_symbols(result, hints, new_state, config, bus_connexions, buses);
             index += 1;
         }
     }

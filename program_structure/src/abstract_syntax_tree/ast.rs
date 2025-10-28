@@ -345,6 +345,25 @@ pub enum Expression {
     },
 }
 
+impl Expression {
+    pub fn get_meta_information(&self) -> &Meta {
+        match self {
+            Expression::InfixOp { meta, .. } => meta,
+            Expression::PrefixOp { meta, .. } => meta,
+            Expression::InlineSwitchOp { meta, .. } => meta,
+            Expression::ParallelOp { meta, .. } => meta,
+            Expression::Variable { meta, .. } => meta,
+            Expression::Number(meta, _) => meta,
+            Expression::Call { meta, .. } => meta,
+            Expression::BusCall { meta, .. } => meta,
+            Expression::AnonymousComp { meta, .. } => meta,
+            Expression::ArrayInLine { meta, .. } => meta,
+            Expression::Tuple { meta, .. } => meta,
+            Expression::UniformArray { meta, .. } => meta,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Access {
     ComponentAccess(String),

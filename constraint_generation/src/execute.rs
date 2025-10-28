@@ -59,6 +59,7 @@ struct RuntimeInformation {
     pub exec_program: ExecutedProgram,
     pub anonymous_components: AnonymousComponentsInfo,
     pub json_instructions_folder: Option<String>,
+    pub instr_map: Vec<(String, String)>,
 }
 impl RuntimeInformation {
     pub fn new(current_file: FileID, id_max: usize, prime: &String, folder: &Option<String>) -> RuntimeInformation {
@@ -76,6 +77,7 @@ impl RuntimeInformation {
             conditions_state: Vec::new(),
             unknown_counter: 0,
             json_instructions_folder: folder.clone(),
+            instr_map: Vec::new(),
         }
     }
 }
@@ -133,7 +135,8 @@ enum ExecutionError {
     NonValidTagAssignment,
     FalseAssert,
     ArraySizeTooBig,
-    InlineSwitchRouteMismatch,
+    InlineSwitchShapeMismatch,
+    UnknownConditionIf,
 }
 
 enum ExecutionWarning {
@@ -163,14 +166,40 @@ pub fn constraint_execution(
                 arg_values.push(safe_unwrap_to_arithmetic_slice(f_arg.unwrap(), line!()));
                 // improve
             }
-            execute_template_call_complete(
+            let ret = execute_template_call_complete(
                 id,
                 arg_values,
                 HashMap::new(),
                 program_archive,
                 &mut runtime_information,
                 flags,
-            )
+            );
+
+            if let Some(folder) = folder {
+                let mut path = PathBuf::from(folder);
+                path.push("config.json");
+                let file = std::fs::File::create(path).expect("Unable to create instructions config JSON file.");
+                let mut writer = std::io::BufWriter::new(file);
+                writeln!(writer, "{{").unwrap();
+                writeln!(writer, "\"templates\": {{").unwrap();
+                let mut first = true;
+                for (key, value) in &runtime_information.instr_map {
+                    if !first {
+                        writeln!(writer, ",").unwrap();
+                    } else {
+                        first = false;
+                    }
+                    write!(writer, "\"{}\": \"{}\"", key, value).unwrap();
+                }
+                writeln!(writer).unwrap();
+                writeln!(writer, "}},").unwrap();
+                writeln!(writer, "\"main\": \"{}\",", &runtime_information.instr_map.first().unwrap().0).unwrap();
+                writeln!(writer, "\"curve\": \"{}\",", prime).unwrap();
+                writeln!(writer, "\"prime\": \"{}\"", UsefulConstants::new(&prime).get_p()).unwrap();
+                writeln!(writer, "}}").unwrap();
+            }
+
+            ret
         } else {
             unreachable!("The main expression should be a call."); 
         };
@@ -1105,7 +1134,7 @@ fn execute_expression(
                 let mut ae_false = safe_unwrap_to_arithmetic_slice(f_false, line!());
 
                 if ae_true.route() != ae_false.route() {
-                    let err = Result::Err(ExecutionError::InlineSwitchRouteMismatch);
+                    let err = Result::Err(ExecutionError::InlineSwitchShapeMismatch);
                     treat_result_with_execution_error(
                         err,
                         expr.get_meta(),
@@ -1534,7 +1563,6 @@ fn perform_assign(
     flags: FlagsExecution
 ) -> Result<Option<Constrained>, ()> {
     use super::execution_data::type_definitions::{SubComponentData, BusData};
-
     let full_symbol = if accessing_information.bus_access.is_some(){
         create_symbol_bus(symbol, &accessing_information.bus_access.as_ref().unwrap())
 
@@ -2696,8 +2724,13 @@ fn execute_conditional_statement(
         runtime.conditions_state.push((runtime.unknown_counter, true));
         runtime.unknown_counter+=1;
 
-        if let Some(actual_node) = actual_node {
-            actual_node.instr_if(&ae_cond.hint);
+        if let Some(_) = actual_node {
+            treat_result_with_execution_error(
+                Result::Err(ExecutionError::UnknownConditionIf),
+                &condition.get_meta_information(),
+                &mut runtime.runtime_errors,
+                &runtime.call_trace,
+            )?;
         }
 
         let (mut ret_value, mut can_simplify) = execute_statement(true_case, program_archive, runtime, actual_node, flags)?;
@@ -2705,11 +2738,6 @@ fn execute_conditional_statement(
             // Update the conditions state and set the last to false
             let index = runtime.conditions_state.len()-1;
             runtime.conditions_state[index].1 = false;
-
-            if let Some(actual_node) = actual_node {
-                actual_node.instr_else();
-            }
-            
             let (else_ret, can_simplify_else) = execute_statement(else_stmt, program_archive, runtime, actual_node, flags)?;
             can_simplify &= can_simplify_else;
 
@@ -2738,9 +2766,6 @@ fn execute_conditional_statement(
             }
         }
 
-        if let Some(actual_node) = actual_node {
-            actual_node.instr_end_if();
-        }
         // remove the last condition added
         runtime.conditions_state.pop();
         runtime.block_type = previous_block_type;
@@ -3602,6 +3627,7 @@ fn execute_template_call(
             path.push(format!("{}.json", json_name));
             let file = std::fs::File::create(path).expect("Unable to create JSON file for template execution trace.");
             let writer = std::io::BufWriter::new(file);
+            runtime.instr_map.push((instantiation_name.clone(), json_name.clone()));
             Some(Box::new(writer) as Box<dyn std::io::Write>)
         } else {
             None
@@ -4080,6 +4106,7 @@ fn treat_accessing_bus(
                 },
                 Access::ComponentAccess(field) =>{
                     hint_access.push(HintAccess::ComponentAccess(field.clone()));
+                    break;
                 }
             }
         }
@@ -4504,8 +4531,12 @@ fn treat_result_with_execution_error<C>(
                     "There are tag assignments depending on the value of a condition that can be unknown during the constraint generation phase".to_string(),
                     ReportCode::RuntimeError,
                 ),
-                InlineSwitchRouteMismatch => Report::error(
-                    "Inline switch with unknown condition must return values of the same shape in both branches".to_string(),
+                InlineSwitchShapeMismatch => Report::error(
+                    "[Limitation of instructions] Inline switch with unknown condition must return values of the same shape in both branches".to_string(),
+                    ReportCode::RuntimeError,
+                ),
+                UnknownConditionIf => Report::error(
+                    "[Limitation of instructions] If statements must have a condition known during the constraint generation phase".to_string(),
                     ReportCode::RuntimeError,
                 ),
             };
