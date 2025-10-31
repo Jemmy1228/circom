@@ -26,6 +26,8 @@ pub struct BuildConfig {
     pub no_rounds: usize,
     pub flag_json_sub: bool,
     pub json_substitutions: String,
+    pub flag_json_decl: bool,
+    pub json_declarations_folder: String,
     pub flag_s: bool,
     pub flag_f: bool,
     pub flag_p: bool,
