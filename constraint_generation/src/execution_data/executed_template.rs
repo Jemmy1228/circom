@@ -6,6 +6,7 @@ use compiler::hir::very_concrete_program::*;
 use dag::DAG;
 use num_bigint::BigInt;
 use program_structure::ast::{SignalType, Statement};
+use std::collections::BTreeSet;
 use std::collections::{HashMap, HashSet, BTreeMap};
 use std::io::Write;
 use crate::execution_data::AExpressionSlice;
@@ -87,8 +88,11 @@ pub struct ExecutedTemplate {
     connexions: Vec<Connexion>,
     pub bus_connexions: HashMap<String, BusConnexion>,
     pub is_extern_c: bool,
+
     json_writer: Option<Box<dyn Write>>,
     is_first_instruction: bool,
+    derived_all_signals: BTreeSet<String>,
+    hinted_sub_inputs: BTreeSet<String>,
 }
 
 impl ExecutedTemplate {
@@ -132,6 +136,8 @@ impl ExecutedTemplate {
             is_extern_c,
             json_writer: json_writer.take(),
             is_first_instruction: true,
+            derived_all_signals: BTreeSet::new(),
+            hinted_sub_inputs: BTreeSet::new(),
         }
     }
 
@@ -149,13 +155,18 @@ impl ExecutedTemplate {
                 }
                 let signal_left = AExpressionSlice::access_value_by_index(left, i).unwrap_or_default();
                 let value_right = AExpressionSlice::access_value_by_index(right, i).unwrap_or_default();
-                write!(writer, "{{\"left\": \"{}\", \"right\": {}}}", signal_left, value_right.to_json()).unwrap();
+                let symbol = signal_left.to_string();
+                write!(writer, "{{\"left\": \"{}\", \"right\": {}}}", &symbol, value_right.to_json()).unwrap();
+                self.derived_all_signals.insert(symbol);
             }
             write!(writer, "]}}").unwrap();
         }
     }
 
-    pub fn instr_hint(&mut self, left: &AExpressionSlice, right: &AExpressionSlice) {
+    pub fn instr_hint(&mut self, left: &AExpressionSlice, right: &AExpressionSlice, is_subcoponent: bool) {
+        if !is_subcoponent {
+            return; // Only record hints to subcomponent inputs to trigger
+        }
         if let Some(writer) = &mut self.json_writer {
             if self.is_first_instruction {
                 self.is_first_instruction = false;
@@ -168,7 +179,9 @@ impl ExecutedTemplate {
                     write!(writer, ", ").unwrap();
                 }
                 let signal_left = AExpressionSlice::access_value_by_index(left, i).unwrap_or_default();
-                write!(writer, "\"{}\"", signal_left).unwrap();
+                let symbol = signal_left.to_string();
+                write!(writer, "\"{}\"", &symbol).unwrap();
+                self.hinted_sub_inputs.insert(symbol);
             }
             write!(writer, "]}}").unwrap();
         }
@@ -230,24 +243,76 @@ impl ExecutedTemplate {
     }
 
     pub fn write_json_tail(&mut self, templates_info: &Vec<ExecutedTemplate>, buses_info : &Vec<ExecutedBus>) {
+        let mut json_writer = self.json_writer.take();
 
-        let results = self.insert_wires(buses_info);
-
-        if let Some(writer) = &mut self.json_writer {
+        if let Some(writer) = &mut json_writer {
             writeln!(writer).unwrap();
             writeln!(writer, "],").unwrap();
 
-            writeln!(writer, "\"signals\": {{").unwrap();
+            let signal_types = self.insert_wires(buses_info);
+            let mut template_signals = BTreeSet::new();
+            writeln!(writer, "\"signal_types\": {{").unwrap();
             {
                 let empty = Vec::new();
-                let inputs = results.get(&0).unwrap_or(&empty);
-                writeln!(writer, "\"inputs\": [{}],", inputs.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<String>>().join(", ")).unwrap();
-                let outputs = results.get(&1).unwrap_or(&empty);
-                writeln!(writer, "\"outputs\": [{}],", outputs.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<String>>().join(", ")).unwrap();
-                let intermediates = results.get(&2).unwrap_or(&empty);
-                writeln!(writer, "\"intermediates\": [{}]", intermediates.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<String>>().join(", ")).unwrap();
+                let inputs = signal_types.get(&0).unwrap_or(&empty);
+                write!(writer, "\"inputs\": [").unwrap();
+                for (i, s) in inputs.iter().enumerate() {
+                    if i > 0 {
+                        write!(writer, ", ").unwrap();
+                    }
+                    write!(writer, "\"{}\"", s).unwrap();
+                }
+                writeln!(writer, "],").unwrap();
+
+                let outputs = signal_types.get(&1).unwrap_or(&empty);
+                write!(writer, "\"outputs\": [").unwrap();
+                for (i, s) in outputs.iter().enumerate() {
+                    if i > 0 {
+                        write!(writer, ", ").unwrap();
+                    }
+                    write!(writer, "\"{}\"", s).unwrap();
+                    template_signals.insert(s.clone());
+                }
+                writeln!(writer, "],").unwrap();
+
+                let intermediates = signal_types.get(&2).unwrap_or(&empty);
+                write!(writer, "\"intermediates\": [").unwrap();
+                for (i, s) in intermediates.iter().enumerate() {
+                    if i > 0 {
+                        write!(writer, ", ").unwrap();
+                    }
+                    write!(writer, "\"{}\"", s).unwrap();
+                    template_signals.insert(s.clone());
+                }
+                writeln!(writer, "]").unwrap();
             }
             writeln!(writer, "}},").unwrap();
+            std::mem::drop(signal_types); // free memory
+
+            let derived_all_signals = std::mem::take(&mut self.derived_all_signals);
+            let hinted_sub_inputs = std::mem::take(&mut self.hinted_sub_inputs);
+            let hinted_template_signals = template_signals.difference(&derived_all_signals);
+            write!(writer, "\"hints\": [").unwrap();
+            {
+                let mut first = true;
+                for s in hinted_template_signals {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(writer, ", ").unwrap();
+                    }
+                    write!(writer, "\"{}\"", s).unwrap();
+                }
+                for s in hinted_sub_inputs {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(writer, ", ").unwrap();
+                    }
+                    write!(writer, "\"{}\"", s).unwrap();
+                }
+            }
+            writeln!(writer, "],").unwrap();
 
             write!(writer, "\"subcomponents\": {{").unwrap();
             if self.subcomponent_declarations.is_empty() {
@@ -257,7 +322,7 @@ impl ExecutedTemplate {
                 let mut first = true;
                 for (name, node_pointer) in &self.subcomponent_declarations {
                     if !first {
-                        writeln!(writer, ", ").unwrap();
+                        writeln!(writer, ",").unwrap();
                     }
                     write!(writer, "\"{}\": \"{}\"", name, templates_info[*node_pointer].report_name).unwrap();
                     first = false;

@@ -507,7 +507,7 @@ fn execute_statement(
                         AssignOp::AssignConstraintSignal =>
                             node.instr_assign(&constrained.left, &constrained.right),
                         AssignOp::AssignSignal =>
-                            node.instr_hint(&constrained.left, &constrained.right),
+                            node.instr_hint(&constrained.left, &constrained.right, ExecutionEnvironment::has_component(&runtime.environment, var)),
                         AssignOp::AssignVar => unreachable!()
                     }
 

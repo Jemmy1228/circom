@@ -103,19 +103,19 @@ impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
         }
         use ArithmeticExpression::*;
         match self {
-            Number { value } => format!("{{\"$\": \"Instr\", \"@\": \"Number\", \"value\": \"{}\"}}", value.to_str_radix(10)),
-            Signal { symbol } => format!("{{\"$\": \"Instr\", \"@\": \"Signal\", \"symbol\": \"{}\"}}", symbol),
-            NonQuadratic => "{\"$\": \"Instr\", \"@\": \"NonQuadratic\"}".to_string(),
+            Number { value } => format!("{{\"$\": \"QExpr\", \"@\": \"Number\", \"value\": \"{}\"}}", value.to_str_radix(10)),
+            Signal { symbol } => format!("{{\"$\": \"QExpr\", \"@\": \"Signal\", \"symbol\": \"{}\"}}", symbol),
+            NonQuadratic => "{\"$\": \"QExpr\", \"@\": \"NonQuadratic\"}".to_string(),
             Linear { coefficients } => {
                 let coeffs_json = coefficients_to_json(coefficients);
-                format!("{{\"$\": \"Instr\", \"@\": \"Linear\", \"coefficients\": {}}}", coeffs_json)
+                format!("{{\"$\": \"QExpr\", \"@\": \"Linear\", \"coefficients\": {}}}", coeffs_json)
             }
             Quadratic { a, b, c } => {
                 let a_json = coefficients_to_json(a);
                 let b_json = coefficients_to_json(b);
                 let c_json = coefficients_to_json(c);
                 format!(
-                    "{{\"$\": \"Instr\", \"@\": \"Quadratic\", \"a\": {}, \"b\": {}, \"c\": {}}}",
+                    "{{\"$\": \"QExpr\", \"@\": \"Quadratic\", \"a\": {}, \"b\": {}, \"c\": {}}}",
                     a_json, b_json, c_json
                 )
             }
