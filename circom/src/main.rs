@@ -3,6 +3,7 @@ mod execution_user;
 mod input_user;
 mod parser_user;
 mod type_analysis_user;
+mod ast_export_user;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -23,9 +24,16 @@ fn main() {
 fn start() -> Result<(), ()> {
     use compilation_user::CompilerConfig;
     use execution_user::ExecutionConfig;
+    use ast_export::ExportConfig;
     let user_input = Input::new()?;
     let mut program_archive = parser_user::parse_project(&user_input)?;
     type_analysis_user::analyse_project(&mut program_archive)?;
+
+    let export_config = ExportConfig {
+        flag_json_ast: user_input.json_asts_flag(),
+        json_ast_folder: user_input.json_asts_folder().to_string(),
+    };
+    ast_export_user::export_project(&mut program_archive, export_config);
 
     let config = ExecutionConfig {
         no_rounds: user_input.no_rounds(),

@@ -30,6 +30,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ast_export"
+version = "2.2.3"
+dependencies = [
+ "program_structure",
+]
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -99,6 +106,7 @@ name = "circom"
 version = "2.2.3"
 dependencies = [
  "ansi_term",
+ "ast_export",
  "clap",
  "compiler",
  "constraint_generation",
