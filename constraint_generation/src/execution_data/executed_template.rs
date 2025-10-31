@@ -72,7 +72,7 @@ pub struct ExecutedTemplate {
     pub ordered_signals: WireCollector,
     pub constraints: Vec<Constraint>,
     pub components: ComponentCollector,
-    pub subcomponent_declarations: BTreeMap<String, usize>,
+    pub subcomponent_declarations: Vec<(String, usize)>,
     pub number_of_components: usize,
     pub public_inputs: HashSet<String>,
     pub parameter_instances: ParameterContext,
@@ -124,7 +124,7 @@ impl ExecutedTemplate {
             ordered_signals: WireCollector::new(),
             constraints: Vec::new(),
             components: ComponentCollector::new(),
-            subcomponent_declarations: BTreeMap::new(),
+            subcomponent_declarations: Vec::new(),
             number_of_components: 0,
             connexions: Vec::new(),
             bus_connexions: HashMap::new(),
@@ -195,12 +195,14 @@ impl ExecutedTemplate {
     }
 
     pub fn instr_component(&mut self, symbol: &String, node_pointer: usize) {
-        self.subcomponent_declarations.insert(symbol.clone(), node_pointer);
+        self.subcomponent_declarations.push((symbol.clone(), node_pointer));
     }
 
     pub fn write_json_head(&mut self) {
         if let Some(writer) = &mut self.json_writer {
             writeln!(writer, "{{").unwrap();
+            writeln!(writer, "\"$\": \"Definition\",").unwrap();
+            writeln!(writer, "\"@\": \"ExecutedTemplate\",").unwrap();
             writeln!(writer, "\"id\": \"{}\",", self.template_name).unwrap();
 
             write!(writer, "\"parameters\": {{").unwrap();
@@ -229,8 +231,7 @@ impl ExecutedTemplate {
 
     pub fn write_json_tail(&mut self, templates_info: &Vec<ExecutedTemplate>, buses_info : &Vec<ExecutedBus>) {
 
-        let mut signals = BTreeMap::new();
-        self.insert_wires(&mut signals, buses_info);
+        let results = self.insert_wires(buses_info);
 
         if let Some(writer) = &mut self.json_writer {
             writeln!(writer).unwrap();
@@ -238,24 +239,15 @@ impl ExecutedTemplate {
 
             writeln!(writer, "\"signals\": {{").unwrap();
             {
-                let mut first = true;
-                for (name, xtype) in &signals {
-                    if !first {
-                        writeln!(writer, ",").unwrap();
-                    }
-                    let xtype = match *xtype {
-                        0 => "input",
-                        2 => "intermediate",
-                        1 => "output",
-                        _ => unreachable!(),
-                    };
-                    write!(writer, "\"{}\": \"{}\"", name, xtype).unwrap();
-                    first = false;
-                }
-                writeln!(writer).unwrap();
-                writeln!(writer, "}},").unwrap();
+                let empty = Vec::new();
+                let inputs = results.get(&0).unwrap_or(&empty);
+                writeln!(writer, "\"inputs\": [{}],", inputs.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<String>>().join(", ")).unwrap();
+                let outputs = results.get(&1).unwrap_or(&empty);
+                writeln!(writer, "\"outputs\": [{}],", outputs.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<String>>().join(", ")).unwrap();
+                let intermediates = results.get(&2).unwrap_or(&empty);
+                writeln!(writer, "\"intermediates\": [{}]", intermediates.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<String>>().join(", ")).unwrap();
             }
-            std::mem::drop(signals);
+            writeln!(writer, "}},").unwrap();
 
             write!(writer, "\"subcomponents\": {{").unwrap();
             if self.subcomponent_declarations.is_empty() {
@@ -273,7 +265,7 @@ impl ExecutedTemplate {
                 writeln!(writer).unwrap();
                 writeln!(writer, "}}").unwrap();
             }
-            self.subcomponent_declarations = BTreeMap::new(); // free memory
+            self.subcomponent_declarations = Vec::new();
 
             writeln!(writer, "}}").unwrap();
             self.json_writer = None;
@@ -420,14 +412,16 @@ impl ExecutedTemplate {
         self.build_constraints(dag);
     }
 
-    fn insert_wires(&self, result: &mut BTreeMap<String, usize>, buses_info : &Vec<ExecutedBus>) {
+    fn insert_wires(&self, buses_info : &Vec<ExecutedBus>) -> BTreeMap<usize, Vec<String>> {
+        let mut result: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+
         for wire_data in self.outputs() {
             let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
             let config = SignalConfig { signal_type: 1, dimensions: &wire_data.length, is_public: false };
             if wire_data.is_bus{
-                insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                insert_bus_symbols(&mut result, state, &config, &self.bus_connexions, buses_info );
             } else{
-                insert_symbols(result, state, &config);
+                insert_symbols(&mut result, state, &config);
             }
         }
         for wire_data in self.inputs() {
@@ -435,9 +429,9 @@ impl ExecutedTemplate {
                 let state = State { basic_name: wire_data.name.clone(),  name: wire_data.name.clone(), dim: 0 };
                 let config = SignalConfig { signal_type: 0, dimensions: &wire_data.length, is_public: true };
                 if wire_data.is_bus{
-                    insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                    insert_bus_symbols(&mut result, state, &config, &self.bus_connexions, buses_info );
                 } else{
-                    insert_symbols(result, state, &config);
+                    insert_symbols(&mut result, state, &config);
                 }
             }
         }
@@ -446,9 +440,9 @@ impl ExecutedTemplate {
                 let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
                 let config = SignalConfig { signal_type: 0, dimensions: &wire_data.length, is_public: false };
                 if wire_data.is_bus{
-                    insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                    insert_bus_symbols(&mut result, state, &config, &self.bus_connexions, buses_info );
                 } else{
-                    insert_symbols(result, state, &config);
+                    insert_symbols(&mut result, state, &config);
                 }
             }
         }
@@ -456,11 +450,12 @@ impl ExecutedTemplate {
             let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
             let config = SignalConfig { signal_type: 2, dimensions: &wire_data.length, is_public: false };
             if wire_data.is_bus{
-                insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                insert_bus_symbols(&mut result, state, &config, &self.bus_connexions, buses_info );
             } else{
-                insert_symbols(result, state, &config);
+                insert_symbols(&mut result, state, &config);
             }
         }
+        result
     }
     fn build_wires(&self, dag: &mut DAG, buses_info : &Vec<ExecutedBus>) {
         for wire_data in self.outputs() {
@@ -763,9 +758,9 @@ struct State {
     name: String, //Full name with array accesses.
     dim: usize,
 }
-fn insert_symbols(result: &mut BTreeMap<String, usize>, state: State, config: &SignalConfig) {
+fn insert_symbols(result: &mut BTreeMap<usize, Vec<String>>, state: State, config: &SignalConfig) {
     if state.dim == config.dimensions.len() {
-        result.insert(state.name, config.signal_type);
+        result.entry(config.signal_type).or_insert(Vec::new()).push(state.name);
     } else {
         let mut index = 0;
         while index < config.dimensions[state.dim] {
@@ -776,7 +771,7 @@ fn insert_symbols(result: &mut BTreeMap<String, usize>, state: State, config: &S
         }
     }
 }
-fn insert_bus_symbols(result: &mut BTreeMap<String, usize>, state: State, config: &SignalConfig, bus_connexions: &HashMap<String, BusConnexion>, buses: &Vec<ExecutedBus>) {
+fn insert_bus_symbols(result: &mut BTreeMap<usize, Vec<String>>, state: State, config: &SignalConfig, bus_connexions: &HashMap<String, BusConnexion>, buses: &Vec<ExecutedBus>) {
     let bus_connection = bus_connexions.get(&state.basic_name).unwrap();
     let ex_bus2 = buses.get(bus_connection.inspect.goes_to).unwrap();
     if state.dim == config.dimensions.len() {

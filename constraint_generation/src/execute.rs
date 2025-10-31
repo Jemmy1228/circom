@@ -197,6 +197,26 @@ pub fn constraint_execution(
         } else {
             unreachable!("The main expression should be a call."); 
         };
+
+    if let Some(folder) = &folder {
+        let path = std::path::Path::new(folder)
+                .join("_mapping.json");
+        let file = std::fs::File::create(path).expect("Unable to create JSON file for template execution trace.");
+        use std::io::Write;
+        let mut writer = std::io::BufWriter::new(file);
+        writeln!(writer, "{{").unwrap();
+        writeln!(writer, "\"$\": \"Definition\",").unwrap();
+        write!(writer, "\"@\": \"ReportNameMap\",").unwrap();
+        writeln!(writer, "\"map\": {{").unwrap();
+        for (i, (original, mapped)) in runtime_information.report_name_map.iter().enumerate(){
+            if i != runtime_information.report_name_map.len()-1{
+                writeln!(writer, "\"{}\": \"{}\",", original, mapped).unwrap();
+            } else{
+                writeln!(writer, "\"{}\": \"{}\"", original, mapped).unwrap();
+            }
+        }
+        writeln!(writer, "}}}}").unwrap();
+    }
     
     
     match folded_value_result {
