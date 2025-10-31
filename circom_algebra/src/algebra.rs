@@ -32,7 +32,7 @@ where
     },
     NonQuadratic,
 }
-impl<C: Default + Clone + Display + Hash + Eq> Display for ArithmeticExpression<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord> Display for ArithmeticExpression<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         use ArithmeticExpression::*;
         let msg = match self {
@@ -51,7 +51,7 @@ impl<C: Default + Clone + Display + Hash + Eq> Display for ArithmeticExpression<
     }
 }
 
-impl<C: Default + Clone + Display + Hash + Eq> Clone for ArithmeticExpression<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord> Clone for ArithmeticExpression<C> {
     fn clone(&self) -> Self {
         use ArithmeticExpression::*;
         match self {
@@ -64,8 +64,8 @@ impl<C: Default + Clone + Display + Hash + Eq> Clone for ArithmeticExpression<C>
     }
 }
 
-impl<C: Default + Clone + Display + Hash + Eq> Eq for ArithmeticExpression<C> {}
-impl<C: Default + Clone + Display + Hash + Eq> PartialEq for ArithmeticExpression<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord> Eq for ArithmeticExpression<C> {}
+impl<C: Default + Clone + Display + Hash + Eq + Ord> PartialEq for ArithmeticExpression<C> {
     fn eq(&self, other: &Self) -> bool {
         use ArithmeticExpression::*;
         match (self, other) {
@@ -80,15 +80,46 @@ impl<C: Default + Clone + Display + Hash + Eq> PartialEq for ArithmeticExpressio
     }
 }
 
-impl<C: Default + Clone + Display + Hash + Eq> Default for ArithmeticExpression<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord> Default for ArithmeticExpression<C> {
     fn default() -> Self {
         ArithmeticExpression::NonQuadratic
     }
 }
 
-impl<C: Default + Clone + Display + Hash + Eq> ArithmeticExpression<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord> ArithmeticExpression<C> {
     pub fn new() -> ArithmeticExpression<C> {
         ArithmeticExpression::default()
+    }
+
+    pub fn to_json(&self) -> String {
+        fn coefficients_to_json<C: Default + Clone + Display + Hash + Eq + Ord>(
+            coefficients: &HashMap<C, BigInt>,
+        ) -> String {
+            let coefficients: BTreeSet<(&C, &BigInt)> = coefficients.iter().collect();
+            let coeffs_json: Vec<String> = coefficients.iter()
+                .map(|(k, v)| format!("\"{}\": \"{}\"", k, v.to_str_radix(10)))
+                .collect();
+            format!("{{{}}}", coeffs_json.join(", "))
+        }
+        use ArithmeticExpression::*;
+        match self {
+            Number { value } => format!("{{\"$\": \"Instr\", \"@\": \"Number\", \"value\": \"{}\"}}", value.to_str_radix(10)),
+            Signal { symbol } => format!("{{\"$\": \"Instr\", \"@\": \"Signal\", \"symbol\": \"{}\"}}", symbol),
+            NonQuadratic => "{\"$\": \"Instr\", \"@\": \"NonQuadratic\"}".to_string(),
+            Linear { coefficients } => {
+                let coeffs_json = coefficients_to_json(coefficients);
+                format!("{{\"$\": \"Instr\", \"@\": \"Linear\", \"coefficients\": {}}}", coeffs_json)
+            }
+            Quadratic { a, b, c } => {
+                let a_json = coefficients_to_json(a);
+                let b_json = coefficients_to_json(b);
+                let c_json = coefficients_to_json(c);
+                format!(
+                    "{{\"$\": \"Instr\", \"@\": \"Quadratic\", \"a\": {}, \"b\": {}, \"c\": {}}}",
+                    a_json, b_json, c_json
+                )
+            }
+        }
     }
 
     // printing utils
@@ -839,7 +870,7 @@ where
     pub(crate) from: C,
     pub(crate) to: HashMap<C, BigInt>,
 }
-impl<C: Default + Clone + Display + Hash + Eq> Substitution<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord> Substitution<C> {
     // Substitution public utils
     pub fn new(from: C, to: ArithmeticExpression<C>) -> Option<Substitution<C>> {
         use ArithmeticExpression::*;
@@ -866,7 +897,7 @@ impl<C: Default + Clone + Display + Hash + Eq> Substitution<C> {
         symbol_correspondence: &HashMap<C, K>,
     ) -> Substitution<K>
     where
-        K: Default + Clone + Display + Hash + Eq,
+        K: Default + Clone + Display + Hash + Eq + Ord,
     {
         Substitution::apply_correspondence(&substitution, symbol_correspondence)
     }
@@ -880,7 +911,7 @@ impl<C: Default + Clone + Display + Hash + Eq> Substitution<C> {
         symbol_correspondence: &HashMap<C, K>,
     ) -> Substitution<K>
     where
-        K: Default + Clone + Display + Hash + Eq,
+        K: Default + Clone + Display + Hash + Eq + Ord,
     {
         let from = symbol_correspondence.get(&substitution.from).unwrap().clone();
         let to = apply_raw_correspondence(&substitution.to, symbol_correspondence);
@@ -971,7 +1002,7 @@ impl<C: Default + Clone + Display + Hash + Eq> Substitution<C> {
     }
 }
 
-impl<C: Default + Clone + Display + Hash + Eq + std::cmp::Ord> Substitution<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord + std::cmp::Ord> Substitution<C> {
     pub fn take_cloned_signals_ordered(&self) -> BTreeSet<C> {
         let cq: C = ArithmeticExpression::constant_coefficient();
         let mut signals = BTreeSet::new();
@@ -1008,7 +1039,7 @@ where
     pub(crate) c: HashMap<C, BigInt>,
 }
 
-impl<C: Default + Clone + Display + Hash + Eq> Constraint<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord> Constraint<C> {
     fn new(a: HashMap<C, BigInt>, b: HashMap<C, BigInt>, c: HashMap<C, BigInt>) -> Constraint<C> {
         Constraint { a, b, c }
     }
@@ -1029,7 +1060,7 @@ impl<C: Default + Clone + Display + Hash + Eq> Constraint<C> {
         symbol_correspondence: &HashMap<C, K>,
     ) -> Constraint<K>
     where
-        K: Default + Clone + Display + Hash + Eq,
+        K: Default + Clone + Display + Hash + Eq + Ord,
     {
         Constraint::apply_correspondence(&constraint, symbol_correspondence)
     }
@@ -1039,7 +1070,7 @@ impl<C: Default + Clone + Display + Hash + Eq> Constraint<C> {
         symbol_correspondence: &HashMap<C, K>,
     ) -> Constraint<K>
     where
-        K: Default + Clone + Display + Hash + Eq,
+        K: Default + Clone + Display + Hash + Eq + Ord,
     {
         let a = apply_raw_correspondence(&constraint.a, symbol_correspondence);
         let b = apply_raw_correspondence(&constraint.b, symbol_correspondence);
@@ -1195,7 +1226,7 @@ impl<C: Default + Clone + Display + Hash + Eq> Constraint<C> {
 
 }
 
-impl<C: Default + Clone + Display + Hash + Eq + std::cmp::Ord> Constraint<C> {
+impl<C: Default + Clone + Display + Hash + Eq + Ord + std::cmp::Ord> Constraint<C> {
     pub fn take_cloned_signals_ordered(&self) -> BTreeSet<C> {
         let mut signals = BTreeSet::new();
         for signal in self.a().keys() {
@@ -1247,8 +1278,8 @@ fn apply_raw_correspondence<C, K>(
     map: &HashMap<C, K>,
 ) -> HashMap<K, BigInt>
 where
-    K: Default + Clone + Display + Hash + Eq,
-    C: Default + Clone + Display + Hash + Eq,
+    K: Default + Clone + Display + Hash + Eq + Ord,
+    C: Default + Clone + Display + Hash + Eq + Ord,
 {
     let constant_coefficient: C = ArithmeticExpression::constant_coefficient();
     let mut coefficients_as_correspondence = HashMap::new();
@@ -1281,7 +1312,7 @@ fn raw_substitution<C>(
     substitution: &Substitution<C>,
     field: &BigInt,
 ) where
-    C: Default + Clone + Display + Hash + Eq,
+    C: Default + Clone + Display + Hash + Eq + Ord,
 {
     ArithmeticExpression::initialize_hashmap_for_expression(change);
     if let Option::Some(val) = change.remove(&substitution.from) {
@@ -1295,7 +1326,7 @@ fn raw_substitution<C>(
 
 fn remove_zero_value_coefficients<C>(raw_expression: HashMap<C, BigInt>) -> HashMap<C, BigInt>
 where
-    C: Default + Clone + Display + Hash + Eq,
+    C: Default + Clone + Display + Hash + Eq + Ord,
 {
     let mut clean_raw = HashMap::new();
     for (key, val) in raw_expression {
@@ -1308,7 +1339,7 @@ where
 
 fn fix_raw_constraint<C>(a: &mut RawExpr<C>, b: &mut RawExpr<C>, c: &mut RawExpr<C>, field: &BigInt)
 where
-    C: Default + Clone + Display + Hash + Eq,
+    C: Default + Clone + Display + Hash + Eq + Ord,
 {
     *a = remove_zero_value_coefficients(std::mem::take(a));
     *b = remove_zero_value_coefficients(std::mem::take(b));
@@ -1329,7 +1360,7 @@ fn constant_linear_linear_reduction<C>(
     c: &mut RawExpr<C>,
     field: &BigInt,
 ) where
-    C: Default + Clone + Display + Hash + Eq,
+    C: Default + Clone + Display + Hash + Eq + Ord,
 {
     let cq: C = ArithmeticExpression::constant_coefficient();
     ArithmeticExpression::initialize_hashmap_for_expression(c);
@@ -1345,7 +1376,7 @@ fn constant_linear_linear_reduction<C>(
 
 fn signal_equals_signal<C>(a: &RawExpr<C>, b: &RawExpr<C>, c: &RawExpr<C>, field: &BigInt) -> bool
 where
-    C: Default + Clone + Display + Hash + Eq,
+    C: Default + Clone + Display + Hash + Eq + Ord,
 {
     let cq: C = ArithmeticExpression::constant_coefficient();
     if a.is_empty() && b.is_empty() && !HashMap::contains_key(c, &cq) && c.len() == 2 {
@@ -1361,7 +1392,7 @@ where
 
 fn signal_equals_constant<C>(a: &RawExpr<C>, b: &RawExpr<C>, c: &RawExpr<C>) -> bool
 where
-    C: Default + Clone + Display + Hash + Eq,
+    C: Default + Clone + Display + Hash + Eq + Ord,
 {
     let cq: C = ArithmeticExpression::constant_coefficient();
     HashMap::is_empty(a)
@@ -1373,7 +1404,7 @@ where
 
 fn is_constant_expression<C>(expr: &RawExpr<C>) -> bool
 where
-    C: Default + Clone + Display + Hash + Eq,
+    C: Default + Clone + Display + Hash + Eq + Ord,
 {
     let cq: C = ArithmeticExpression::constant_coefficient();
     HashMap::contains_key(expr, &cq) && HashMap::len(expr) == 1

@@ -26,8 +26,8 @@ pub struct BuildConfig {
     pub no_rounds: usize,
     pub flag_json_sub: bool,
     pub json_substitutions: String,
-    pub flag_json_decl: bool,
-    pub json_declarations_folder: String,
+    pub flag_json_def: bool,
+    pub json_definitions_folder: String,
     pub flag_s: bool,
     pub flag_f: bool,
     pub flag_p: bool,
@@ -51,7 +51,14 @@ pub fn build_circuit(program: ProgramArchive, config: BuildConfig) -> BuildRespo
         verbose: config.flag_verbose,
         inspect: config.inspect_constraints,
     };
-    let (exe, warnings) = instantiation(&program, flags, &config.prime).map_err(|r| {
+    let folder = if config.flag_json_def {
+        let path = std::path::Path::new(&config.json_definitions_folder);
+        std::fs::create_dir_all(path).expect("Could not create json instructions folder");
+        Some(config.json_definitions_folder.clone())
+    } else {
+        None
+    };
+    let (exe, warnings) = instantiation(&program, flags, &config.prime, &folder).map_err(|r| {
         Report::print_reports(&r, &files);
     })?;
     Report::print_reports(&warnings, &files);
@@ -81,8 +88,8 @@ pub fn build_circuit(program: ProgramArchive, config: BuildConfig) -> BuildRespo
 }
 
 type InstantiationResponse = Result<(ExecutedProgram, ReportCollection), ReportCollection>;
-fn instantiation(program: &ProgramArchive, flags: FlagsExecution, prime: &String) -> InstantiationResponse {
-    let execution_result = execute::constraint_execution(&program, flags, prime);
+fn instantiation(program: &ProgramArchive, flags: FlagsExecution, prime: &String, folder: &Option<String>) -> InstantiationResponse {
+    let execution_result = execute::constraint_execution(&program, flags, prime, folder);
     match execution_result {
         Ok((program_exe, warnings)) => {
             let no_nodes = program_exe.number_of_nodes();

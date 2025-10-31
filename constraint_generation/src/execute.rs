@@ -55,9 +55,11 @@ struct RuntimeInformation {
     pub environment: ExecutionEnvironment,
     pub exec_program: ExecutedProgram,
     pub anonymous_components: AnonymousComponentsInfo,
+    pub json_definitions_folder: Option<String>,
+    pub report_name_map: Vec<(String, String)>,
 }
 impl RuntimeInformation {
-    pub fn new(current_file: FileID, id_max: usize, prime: &String) -> RuntimeInformation {
+    pub fn new(current_file: FileID, id_max: usize, prime: &String, folder: &Option<String>) -> RuntimeInformation {
         RuntimeInformation {
             current_file,
             block_type: BlockType::Known,
@@ -71,6 +73,8 @@ impl RuntimeInformation {
             anonymous_components: AnonymousComponentsInfo::new(),
             conditions_state: Vec::new(),
             unknown_counter: 0,
+            json_definitions_folder: folder.clone(),
+            report_name_map: Vec::new(),
         }
     }
 }
@@ -166,9 +170,10 @@ pub fn constraint_execution(
     program_archive: &ProgramArchive,
     flags: FlagsExecution, 
     prime: &String,
+    folder: &Option<String>,
 ) -> Result<(ExecutedProgram, ReportCollection), ReportCollection> {    
     let main_file_id = program_archive.get_file_id_main();
-    let mut runtime_information = RuntimeInformation::new(*main_file_id, program_archive.id_max, prime);
+    let mut runtime_information = RuntimeInformation::new(*main_file_id, program_archive.id_max, prime, folder);
     use Expression::Call;
 
     runtime_information.public_inputs = program_archive.get_public_inputs_main_component().clone();
@@ -211,7 +216,7 @@ pub fn execute_constant_expression(
     prime: &String,
 ) -> Result<BigInt, ReportCollection> {
     let current_file = expression.get_meta().get_file_id();
-    let mut runtime_information = RuntimeInformation::new(current_file, program_archive.id_max, prime);
+    let mut runtime_information = RuntimeInformation::new(current_file, program_archive.id_max, prime, &None);
     runtime_information.environment = environment;
     let folded_value_result =
         execute_expression(expression, program_archive, &mut runtime_information, flags);
@@ -412,7 +417,7 @@ fn execute_statement(
 
 
             if let Option::Some(node) = actual_node {
-                if *op == AssignOp::AssignConstraintSignal || (*op == AssignOp::AssignSignal && flags.inspect){
+                if *op == AssignOp::AssignConstraintSignal || *op == AssignOp::AssignSignal {
                     debug_assert!(possible_constraint.is_some());
                     
                     if *op == AssignOp::AssignConstraintSignal && runtime.block_type == BlockType::Unknown{
@@ -476,6 +481,14 @@ fn execute_statement(
                                 needs_double_arrow.push(signal_name);
                             }
                         }
+                    }
+
+                    match *op {
+                        AssignOp::AssignConstraintSignal =>
+                            node.instr_assign(&constrained.left, &constrained.right),
+                        AssignOp::AssignSignal =>
+                            node.instr_hint(&constrained.left, &constrained.right),
+                        AssignOp::AssignVar => unreachable!()
                     }
 
                     if !needs_double_arrow.is_empty() && flags.inspect{
@@ -629,6 +642,10 @@ fn execute_statement(
             } else{
                 unreachable!()
             };
+
+            if let Option::Some(node) = actual_node {
+                node.instr_constrain(&arith_left, &arith_right);
+            }
 
             for i in 0..arith_left.len(){
                 let value_left = &arith_left[i];
@@ -1876,6 +1893,7 @@ fn perform_assign(
                             goes_to: node_pointer,
                             indexed_with: accessing_information.array_access.clone(),
                         };
+                        node.instr_component(&full_symbol, node_pointer);
                         node.add_arrow(full_symbol.clone(), data);
                     },
                     ExecutedStructure::Bus(_) =>{
@@ -2118,6 +2136,7 @@ fn perform_assign(
                                 indexed_with: accessing_information.array_access.clone(),
                             };
                             let component_symbol = create_component_symbol(symbol, &accessing_information.array_access);
+                            node.instr_component(&component_symbol, node_pointer);
                             node.add_arrow(component_symbol, data);
                         },
                         ExecutedStructure::Bus(_) =>{
@@ -3394,9 +3413,17 @@ fn execute_template_call(
     let mut args_to_values = BTreeMap::new();
     debug_assert_eq!(args_names.len(), parameter_values.len());
     let mut instantiation_name = format!("{}(", id);
+    let mut json_filename = format!("{}(", id);
     let mut not_empty_name = false;
     for (name, value) in args_names.iter().zip(parameter_values) {
-        instantiation_name.push_str(&format!("{},", value.to_string()));
+        let str_value = value.to_string();
+        instantiation_name.push_str(&format!("{},", str_value));
+        let json_value = if str_value.len() > 10 {
+            format!("@{:08x},", crc32fast::hash(str_value.as_bytes()))
+        } else {
+            format!("{},", &str_value)
+        };
+        json_filename.push_str(&json_value);
         not_empty_name = true;
         args_to_values.insert(name.clone(), value.clone());
     }
@@ -3405,10 +3432,12 @@ fn execute_template_call(
         for (_tag, value) in &input_tags.tags {
             if value.is_none(){
                 instantiation_name.push_str("null,");
+                json_filename.push_str("null,");
             }
             else{
                 let value = value.clone().unwrap();
                 instantiation_name.push_str(&format!("{},", value.to_string()));
+                json_filename.push_str(&format!("{},", value.to_string()));
             }
             not_empty_name = true;
         }
@@ -3416,8 +3445,10 @@ fn execute_template_call(
 
     if not_empty_name  {
         instantiation_name.pop();
+        json_filename.pop();
     }
     instantiation_name.push(')');
+    json_filename.push(')');
     let existent_node = runtime.exec_program.identify_node(id, &args_to_values, &tag_values);
     let node_pointer = if let Option::Some(pointer) = existent_node {
         pointer
@@ -3425,7 +3456,17 @@ fn execute_template_call(
         let analysis =
             std::mem::replace(&mut runtime.analysis, Analysis::new(program_archive.id_max));
         let code = program_archive.get_template_data(id).get_body().clone();
-        let mut node_wrap = Option::Some(ExecutedTemplate::new(
+        let mut json_writer = if let Some(folder) = &runtime.json_definitions_folder {
+            let path = std::path::Path::new(folder)
+                .join(format!("{}.json", json_filename));
+            let file = std::fs::File::create(path).expect("Unable to create JSON file for template execution trace.");
+            let writer = std::io::BufWriter::new(file);
+            runtime.report_name_map.push((instantiation_name.clone(), json_filename.clone()));
+            Some(Box::new(writer) as Box<dyn std::io::Write>)
+        } else {
+            None
+        };
+        let mut node = ExecutedTemplate::new(
             is_main,
             id.to_string(),
             instantiation_name,
@@ -3434,8 +3475,11 @@ fn execute_template_call(
             code,
             is_parallel,
             is_custom_gate,
-            is_extern_c
-        ));
+            is_extern_c,
+            &mut json_writer,
+        );
+        node.write_json_head();
+        let mut node_wrap = Option::Some(node);
         let (ret, _) = execute_sequence_of_statements(
             template_body,
             program_archive,
@@ -3459,6 +3503,7 @@ fn execute_template_call(
             Ok(_) => {},
         }
         let mut new_node = node_wrap.unwrap();
+        new_node.write_json_tail(&runtime.exec_program.model, &runtime.exec_program.model_buses);
 
 
         // we add the tags to the executed template

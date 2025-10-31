@@ -67,18 +67,31 @@ impl<C: Clone> Clone for MemorySlice<C> {
 
 impl<C: Default + Clone + Display + Eq> Display for MemorySlice<C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if self.values.is_empty() {
-            f.write_str("[]")
-        } else if self.values.len() == 1 {
-            f.write_str(&format!("{}", self.values[0]))
-        } else {
-            let mut msg = format!("[{}", self.values[0]);
-            for i in 1..self.values.len() {
-                msg.push_str(&format!(",{}", self.values[i]));
+        fn fmt_recursive<C: Default + Clone + Display + Eq>(
+            f: &mut Formatter<'_>,
+            route: &[SliceCapacity],
+            values: &[C],
+        ) -> std::fmt::Result {
+            if route.is_empty() {
+                write!(f, "{}", values[0])?;
+            } else {
+                write!(f, "[")?;
+                let chunk_size: usize = route[1..].iter().product();
+                for i in 0..route[0] {
+                    if i > 0 {
+                        write!(f, ",")?;
+                    }
+                    fmt_recursive(
+                        f,
+                        &route[1..],
+                        &values[i * chunk_size..(i + 1) * chunk_size],
+                    )?;
+                }
+                write!(f, "]")?;
             }
-            msg.push_str("]");
-            f.write_str(&msg)
+            Ok(())
         }
+        fmt_recursive(f, &self.route, &self.values)
     }
 }
 

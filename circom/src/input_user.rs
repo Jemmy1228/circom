@@ -6,7 +6,7 @@ pub struct Input {
     pub out_json_constraints: PathBuf,
     pub out_json_substitutions: PathBuf,
     pub out_json_ast_folder: PathBuf,
-    pub out_json_declaration_folder: PathBuf,
+    pub out_json_definition_folder: PathBuf,
     pub out_wat_code: PathBuf,
     pub out_wasm_code: PathBuf,
     pub out_wasm_name: String,
@@ -27,7 +27,7 @@ pub struct Input {
     pub json_constraint_flag: bool,
     pub json_substitution_flag: bool,
     pub json_ast_flag: bool,
-    pub json_declaration_flag: bool,
+    pub json_definition_flag: bool,
     pub main_inputs_flag: bool,
     pub print_ir_flag: bool,
     pub fast_flag: bool,
@@ -71,7 +71,7 @@ impl Input {
         let output_c_path = Input::build_folder(&output_path, &file_name, CPP);
         let output_js_path = Input::build_folder(&output_path, &file_name, JS);
         let out_json_ast_path = Input::build_folder(&output_path, &file_name, "ast");
-        let out_json_declaration_folder = Input::build_folder(&output_path, &file_name, "declaration");
+        let out_json_definition_folder = Input::build_folder(&output_path, &file_name, "definition");
         let o_style = input_processing::get_simplification_style(&matches)?;
         let sanity_check_style = input_processing::get_sanity_check_style(&matches)?;
         let link_libraries = input_processing::get_link_libraries(&matches);
@@ -99,7 +99,7 @@ impl Input {
                 JSON,
             ),
             out_json_ast_folder: out_json_ast_path.clone(),
-            out_json_declaration_folder: out_json_declaration_folder.clone(),
+            out_json_definition_folder: out_json_definition_folder.clone(),
             wat_flag:input_processing::get_wat(&matches),
             wasm_flag: input_processing::get_wasm(&matches),
             c_flag: c_flag,
@@ -111,7 +111,7 @@ impl Input {
             json_constraint_flag: input_processing::get_json_constraints(&matches),
             json_substitution_flag: input_processing::get_json_substitutions(&matches),
             json_ast_flag: input_processing::get_json_asts(&matches),
-            json_declaration_flag: input_processing::get_json_declaration(&matches),
+            json_definition_flag: input_processing::get_json_definition(&matches),
             print_ir_flag: input_processing::get_ir(&matches),
             no_rounds: if let SimplificationStyle::O2(r) = o_style { r } else { 0 },
             fast_flag: o_style == SimplificationStyle::O0,
@@ -187,8 +187,8 @@ impl Input {
     pub fn json_asts_folder(&self) -> &str {
         self.out_json_ast_folder.to_str().unwrap()
     }
-    pub fn json_declarations_folder(&self) -> &str {
-        self.out_json_declaration_folder.to_str().unwrap()
+    pub fn json_definitions_folder(&self) -> &str {
+        self.out_json_definition_folder.to_str().unwrap()
     }
     pub fn wasm_flag(&self) -> bool {
         self.wasm_flag
@@ -220,8 +220,8 @@ impl Input {
     pub fn json_asts_flag(&self) -> bool {
         self.json_ast_flag
     }
-    pub fn json_declarations_flag(&self) -> bool {
-        self.json_declaration_flag
+    pub fn json_definitions_flag(&self) -> bool {
+        self.json_definition_flag
     }
     pub fn main_inputs_flag(&self) -> bool {
         self.main_inputs_flag
@@ -344,8 +344,8 @@ mod input_processing {
         matches.is_present("print_json_ast")
     }
 
-    pub fn get_json_declaration(matches: &ArgMatches) -> bool {
-        matches.is_present("print_json_declaration")
+    pub fn get_json_definition(matches: &ArgMatches) -> bool {
+        matches.is_present("print_json_definition")
     }
 
     pub fn get_sym(matches: &ArgMatches) -> bool {
@@ -513,11 +513,11 @@ mod input_processing {
                     .help("Outputs the AST in json format"),
             )
             .arg(
-                Arg::with_name("print_json_declaration")
-                    .long("circuit_declaration")
+                Arg::with_name("print_json_definition")
+                    .long("circuit_definition")
                     .takes_value(false)
                     .display_order(999)
-                    .help("Outputs the circuit declaration in json format"),
+                    .help("Outputs the circuit definition in json format"),
             )
             .arg(
                 Arg::with_name("print_sym")

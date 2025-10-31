@@ -6,7 +6,8 @@ use compiler::hir::very_concrete_program::*;
 use dag::DAG;
 use num_bigint::BigInt;
 use program_structure::ast::{SignalType, Statement};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeMap};
+use std::io::Write;
 use crate::execution_data::AExpressionSlice;
 
 
@@ -71,6 +72,7 @@ pub struct ExecutedTemplate {
     pub ordered_signals: WireCollector,
     pub constraints: Vec<Constraint>,
     pub components: ComponentCollector,
+    pub subcomponent_declarations: BTreeMap<String, usize>,
     pub number_of_components: usize,
     pub public_inputs: HashSet<String>,
     pub parameter_instances: ParameterContext,
@@ -84,7 +86,9 @@ pub struct ExecutedTemplate {
     pub underscored_signals: Vec<String>,
     connexions: Vec<Connexion>,
     pub bus_connexions: HashMap<String, BusConnexion>,
-    pub is_extern_c: bool
+    pub is_extern_c: bool,
+    json_writer: Option<Box<dyn Write>>,
+    is_first_instruction: bool,
 }
 
 impl ExecutedTemplate {
@@ -97,7 +101,8 @@ impl ExecutedTemplate {
         code: Statement,
         is_parallel: bool,
         is_custom_gate: bool,
-        is_extern_c: bool
+        is_extern_c: bool,
+        json_writer: &mut Option<Box<dyn Write>>
     ) -> ExecutedTemplate {
         let public_inputs: HashSet<_> = public.iter().cloned().collect();
 
@@ -119,11 +124,159 @@ impl ExecutedTemplate {
             ordered_signals: WireCollector::new(),
             constraints: Vec::new(),
             components: ComponentCollector::new(),
+            subcomponent_declarations: BTreeMap::new(),
             number_of_components: 0,
             connexions: Vec::new(),
             bus_connexions: HashMap::new(),
             underscored_signals: Vec::new(),
-            is_extern_c
+            is_extern_c,
+            json_writer: json_writer.take(),
+            is_first_instruction: true,
+        }
+    }
+
+    pub fn instr_assign(&mut self, left: &AExpressionSlice, right: &AExpressionSlice) {
+        if let Some(writer) = &mut self.json_writer {
+            if self.is_first_instruction {
+                self.is_first_instruction = false;
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer, "{{\"$\": \"Instr\", \"@\": \"Assign\", \"signals\": [").unwrap();
+            for i in 0..AExpressionSlice::get_number_of_cells(right) {
+                if i > 0 {
+                    write!(writer, ", ").unwrap();
+                }
+                let signal_left = AExpressionSlice::access_value_by_index(left, i).unwrap_or_default();
+                let value_right = AExpressionSlice::access_value_by_index(right, i).unwrap_or_default();
+                write!(writer, "{{\"left\": \"{}\", \"right\": {}}}", signal_left, value_right.to_json()).unwrap();
+            }
+            write!(writer, "]}}").unwrap();
+        }
+    }
+
+    pub fn instr_hint(&mut self, left: &AExpressionSlice, right: &AExpressionSlice) {
+        if let Some(writer) = &mut self.json_writer {
+            if self.is_first_instruction {
+                self.is_first_instruction = false;
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer, "{{\"$\": \"Instr\", \"@\": \"Hint\", \"signals\": [").unwrap();
+            for i in 0..AExpressionSlice::get_number_of_cells(right) {
+                if i > 0 {
+                    write!(writer, ", ").unwrap();
+                }
+                let signal_left = AExpressionSlice::access_value_by_index(left, i).unwrap_or_default();
+                write!(writer, "\"{}\"", signal_left).unwrap();
+            }
+            write!(writer, "]}}").unwrap();
+        }
+    }
+
+    pub fn instr_constrain(&mut self, left: &Vec<ArithmeticExpression<String>>, right: &Vec<ArithmeticExpression<String>>) {
+        if let Some(writer) = &mut self.json_writer {
+            if self.is_first_instruction {
+                self.is_first_instruction = false;
+            } else {
+                writeln!(writer, ",").unwrap();
+            }
+            write!(writer, "{{\"$\": \"Instr\", \"@\": \"Constrain\", \"pairs\": [").unwrap();
+            for i in 0..right.len() {
+                if i > 0 {
+                    write!(writer, ", ").unwrap();
+                }
+                let value_left= &left[i];
+                let value_right = &right[i];
+                write!(writer, "{{\"left\": {}, \"right\": {}}}", value_left.to_json(), value_right.to_json()).unwrap();
+            }
+            write!(writer, "]}}").unwrap();
+        }
+    }
+
+    pub fn instr_component(&mut self, symbol: &String, node_pointer: usize) {
+        self.subcomponent_declarations.insert(symbol.clone(), node_pointer);
+    }
+
+    pub fn write_json_head(&mut self) {
+        if let Some(writer) = &mut self.json_writer {
+            writeln!(writer, "{{").unwrap();
+            writeln!(writer, "\"id\": \"{}\",", self.template_name).unwrap();
+
+            write!(writer, "\"parameters\": {{").unwrap();
+            {
+                let mut first = true;
+                for (name, value) in self.parameter_instances.clone() {
+                    if first {
+                        first = false;
+                        writeln!(writer).unwrap();
+                    } else {
+                        writeln!(writer, ",").unwrap();
+                    }
+                    write!(writer, "\"{}\": {}", name, value.to_string()).unwrap();
+                }
+                if !first {
+                    writeln!(writer).unwrap();
+                }
+                writeln!(writer, "}},").unwrap();
+            }
+
+            writeln!(writer, "\"is_parallel\" : {},", self.is_parallel).unwrap();
+            writeln!(writer, "\"instructions\": [").unwrap();
+            writer.flush().unwrap();
+        }
+    }
+
+    pub fn write_json_tail(&mut self, templates_info: &Vec<ExecutedTemplate>, buses_info : &Vec<ExecutedBus>) {
+
+        let mut signals = BTreeMap::new();
+        self.insert_wires(&mut signals, buses_info);
+
+        if let Some(writer) = &mut self.json_writer {
+            writeln!(writer).unwrap();
+            writeln!(writer, "],").unwrap();
+
+            writeln!(writer, "\"signals\": {{").unwrap();
+            {
+                let mut first = true;
+                for (name, xtype) in &signals {
+                    if !first {
+                        writeln!(writer, ",").unwrap();
+                    }
+                    let xtype = match *xtype {
+                        0 => "input",
+                        2 => "intermediate",
+                        1 => "output",
+                        _ => unreachable!(),
+                    };
+                    write!(writer, "\"{}\": \"{}\"", name, xtype).unwrap();
+                    first = false;
+                }
+                writeln!(writer).unwrap();
+                writeln!(writer, "}},").unwrap();
+            }
+            std::mem::drop(signals);
+
+            write!(writer, "\"subcomponents\": {{").unwrap();
+            if self.subcomponent_declarations.is_empty() {
+                writeln!(writer, "}}").unwrap();
+            } else {
+                writeln!(writer).unwrap();
+                let mut first = true;
+                for (name, node_pointer) in &self.subcomponent_declarations {
+                    if !first {
+                        writeln!(writer, ", ").unwrap();
+                    }
+                    write!(writer, "\"{}\": \"{}\"", name, templates_info[*node_pointer].report_name).unwrap();
+                    first = false;
+                }
+                writeln!(writer).unwrap();
+                writeln!(writer, "}}").unwrap();
+            }
+            self.subcomponent_declarations = BTreeMap::new(); // free memory
+
+            writeln!(writer, "}}").unwrap();
+            self.json_writer = None;
         }
     }
 
@@ -267,6 +420,48 @@ impl ExecutedTemplate {
         self.build_constraints(dag);
     }
 
+    fn insert_wires(&self, result: &mut BTreeMap<String, usize>, buses_info : &Vec<ExecutedBus>) {
+        for wire_data in self.outputs() {
+            let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
+            let config = SignalConfig { signal_type: 1, dimensions: &wire_data.length, is_public: false };
+            if wire_data.is_bus{
+                insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+            } else{
+                insert_symbols(result, state, &config);
+            }
+        }
+        for wire_data in self.inputs() {
+            if self.public_inputs.contains(&wire_data.name) {
+                let state = State { basic_name: wire_data.name.clone(),  name: wire_data.name.clone(), dim: 0 };
+                let config = SignalConfig { signal_type: 0, dimensions: &wire_data.length, is_public: true };
+                if wire_data.is_bus{
+                    insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                } else{
+                    insert_symbols(result, state, &config);
+                }
+            }
+        }
+        for wire_data in self.inputs() {
+            if !self.public_inputs.contains(&wire_data.name) {
+                let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
+                let config = SignalConfig { signal_type: 0, dimensions: &wire_data.length, is_public: false };
+                if wire_data.is_bus{
+                    insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+                } else{
+                    insert_symbols(result, state, &config);
+                }
+            }
+        }
+        for wire_data in self.intermediates() {
+            let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
+            let config = SignalConfig { signal_type: 2, dimensions: &wire_data.length, is_public: false };
+            if wire_data.is_bus{
+                insert_bus_symbols(result, state, &config, &self.bus_connexions, buses_info );
+            } else{
+                insert_symbols(result, state, &config);
+            }
+        }
+    }
     fn build_wires(&self, dag: &mut DAG, buses_info : &Vec<ExecutedBus>) {
         for wire_data in self.outputs() {
             let state = State { basic_name: wire_data.name.clone(), name: wire_data.name.clone(), dim: 0 };
@@ -567,6 +762,44 @@ struct State {
     basic_name: String, //Only name without array accesses [].
     name: String, //Full name with array accesses.
     dim: usize,
+}
+fn insert_symbols(result: &mut BTreeMap<String, usize>, state: State, config: &SignalConfig) {
+    if state.dim == config.dimensions.len() {
+        result.insert(state.name, config.signal_type);
+    } else {
+        let mut index = 0;
+        while index < config.dimensions[state.dim] {
+            let new_state =
+                State { basic_name: state.basic_name.clone(), name: format!("{}[{}]", state.name, index), dim: state.dim + 1 };
+            insert_symbols(result, new_state, config);
+            index += 1;
+        }
+    }
+}
+fn insert_bus_symbols(result: &mut BTreeMap<String, usize>, state: State, config: &SignalConfig, bus_connexions: &HashMap<String, BusConnexion>, buses: &Vec<ExecutedBus>) {
+    let bus_connection = bus_connexions.get(&state.basic_name).unwrap();
+    let ex_bus2 = buses.get(bus_connection.inspect.goes_to).unwrap();
+    if state.dim == config.dimensions.len() {
+        for info_field in ex_bus2.fields(){
+            let signal_name = format!("{}.{}",state.name, info_field.name);
+            let state = State { basic_name: info_field.name.clone(), name: signal_name, dim: 0 };
+            let config = SignalConfig { signal_type: config.signal_type, dimensions: &info_field.length, is_public: config.is_public };
+            if info_field.is_bus{
+                insert_bus_symbols(result, state, &config, ex_bus2.bus_connexions(), buses);
+            } else{
+                insert_symbols(result, state, &config);
+            }
+        }
+
+    } else {
+        let mut index = 0;
+        while index < config.dimensions[state.dim] {
+            let new_state =
+                State { basic_name: state.basic_name.clone(), name: format!("{}[{}]", state.name, index), dim: state.dim + 1 };
+            insert_bus_symbols(result, new_state, config, bus_connexions, buses);
+            index += 1;
+        }
+    }
 }
 fn generate_symbols(dag: &mut DAG, state: State, config: &SignalConfig) {
     if state.dim == config.dimensions.len() {
