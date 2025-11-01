@@ -105,7 +105,10 @@ fn export_bus(writer: &mut Box<dyn Write>, data: &BusData) {
         }
         write!(writer, "\"{}\"", param_name).unwrap();
     }
-    writeln!(writer, "]").unwrap();
+    writeln!(writer, "],").unwrap();
+    write!(writer, "\"body\": ").unwrap();
+    statement::export_statement(writer, data.get_body());
+    writeln!(writer).unwrap();
     writeln!(writer, "}}").unwrap();
 }
 

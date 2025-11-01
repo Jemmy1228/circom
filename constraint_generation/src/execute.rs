@@ -503,11 +503,12 @@ fn execute_statement(
                         }
                     }
 
+                    let is_component = ExecutionEnvironment::has_component(&runtime.environment, var);
                     match *op {
                         AssignOp::AssignConstraintSignal =>
-                            node.instr_assign(&constrained.left, &constrained.right),
+                            node.instr_assign(&constrained.left, &constrained.right, is_component),
                         AssignOp::AssignSignal =>
-                            node.instr_hint(&constrained.left, &constrained.right, ExecutionEnvironment::has_component(&runtime.environment, var)),
+                            node.instr_hint(&constrained.left, is_component),
                         AssignOp::AssignVar => unreachable!()
                     }
 

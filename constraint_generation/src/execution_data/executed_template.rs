@@ -91,7 +91,8 @@ pub struct ExecutedTemplate {
 
     json_writer: Option<Box<dyn Write>>,
     is_first_instruction: bool,
-    derived_all_signals: BTreeSet<String>,
+    derived_template_signals: BTreeSet<String>,
+    derived_sub_inputs: BTreeSet<String>,
     hinted_sub_inputs: BTreeSet<String>,
 }
 
@@ -136,12 +137,13 @@ impl ExecutedTemplate {
             is_extern_c,
             json_writer: json_writer.take(),
             is_first_instruction: true,
-            derived_all_signals: BTreeSet::new(),
+            derived_template_signals: BTreeSet::new(),
+            derived_sub_inputs: BTreeSet::new(),
             hinted_sub_inputs: BTreeSet::new(),
         }
     }
 
-    pub fn instr_assign(&mut self, left: &AExpressionSlice, right: &AExpressionSlice) {
+    pub fn instr_assign(&mut self, left: &AExpressionSlice, right: &AExpressionSlice, is_subcoponent: bool) {
         if let Some(writer) = &mut self.json_writer {
             if self.is_first_instruction {
                 self.is_first_instruction = false;
@@ -149,7 +151,7 @@ impl ExecutedTemplate {
                 writeln!(writer, ",").unwrap();
             }
             write!(writer, "{{\"$\": \"Instr\", \"@\": \"Assign\", \"signals\": [").unwrap();
-            for i in 0..AExpressionSlice::get_number_of_cells(right) {
+            for i in 0..AExpressionSlice::get_number_of_cells(left) {
                 if i > 0 {
                     write!(writer, ", ").unwrap();
                 }
@@ -157,13 +159,17 @@ impl ExecutedTemplate {
                 let value_right = AExpressionSlice::access_value_by_index(right, i).unwrap_or_default();
                 let symbol = signal_left.to_string();
                 write!(writer, "{{\"left\": \"{}\", \"right\": {}}}", &symbol, value_right.to_json()).unwrap();
-                self.derived_all_signals.insert(symbol);
+                if is_subcoponent {
+                    self.derived_sub_inputs.insert(symbol);
+                } else {
+                    self.derived_template_signals.insert(symbol);
+                }
             }
             write!(writer, "]}}").unwrap();
         }
     }
 
-    pub fn instr_hint(&mut self, left: &AExpressionSlice, right: &AExpressionSlice, is_subcoponent: bool) {
+    pub fn instr_hint(&mut self, left: &AExpressionSlice, is_subcoponent: bool) {
         if !is_subcoponent {
             return; // Only record hints to subcomponent inputs to trigger
         }
@@ -174,7 +180,7 @@ impl ExecutedTemplate {
                 writeln!(writer, ",").unwrap();
             }
             write!(writer, "{{\"$\": \"Instr\", \"@\": \"Hint\", \"signals\": [").unwrap();
-            for i in 0..AExpressionSlice::get_number_of_cells(right) {
+            for i in 0..AExpressionSlice::get_number_of_cells(left) {
                 if i > 0 {
                     write!(writer, ", ").unwrap();
                 }
@@ -195,7 +201,7 @@ impl ExecutedTemplate {
                 writeln!(writer, ",").unwrap();
             }
             write!(writer, "{{\"$\": \"Instr\", \"@\": \"Constrain\", \"pairs\": [").unwrap();
-            for i in 0..right.len() {
+            for i in 0..left.len() {
                 if i > 0 {
                     write!(writer, ", ").unwrap();
                 }
@@ -289,10 +295,11 @@ impl ExecutedTemplate {
             writeln!(writer, "}},").unwrap();
             std::mem::drop(signal_types); // free memory
 
-            let derived_all_signals = std::mem::take(&mut self.derived_all_signals);
+            let derived_template_signals = std::mem::take(&mut self.derived_template_signals);
+            let derived_sub_inputs = std::mem::take(&mut self.derived_sub_inputs);
             let hinted_sub_inputs = std::mem::take(&mut self.hinted_sub_inputs);
-            let hinted_template_signals = template_signals.difference(&derived_all_signals);
-            write!(writer, "\"hints\": [").unwrap();
+            let hinted_template_signals = template_signals.difference(&derived_template_signals);
+            write!(writer, "\"hint_signals\": [").unwrap();
             {
                 let mut first = true;
                 for s in hinted_template_signals {
@@ -304,6 +311,28 @@ impl ExecutedTemplate {
                     write!(writer, "\"{}\"", s).unwrap();
                 }
                 for s in hinted_sub_inputs {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(writer, ", ").unwrap();
+                    }
+                    write!(writer, "\"{}\"", s).unwrap();
+                }
+            }
+            writeln!(writer, "],").unwrap();
+
+            write!(writer, "\"derived_signals\": [").unwrap();
+            {
+                let mut first = true;
+                for s in derived_template_signals {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(writer, ", ").unwrap();
+                    }
+                    write!(writer, "\"{}\"", s).unwrap();
+                }
+                for s in derived_sub_inputs {
                     if first {
                         first = false;
                     } else {
